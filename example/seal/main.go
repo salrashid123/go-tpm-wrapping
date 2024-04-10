@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"github.com/google/go-tpm/tpmutil"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const ()
@@ -44,7 +47,30 @@ func main() {
 
 	fmt.Printf("Encrypted: %s\n", hex.EncodeToString(blobInfo.Ciphertext))
 
-	plaintext, err := wrapper.Decrypt(ctx, blobInfo)
+	b, err := protojson.Marshal(blobInfo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error marshalling bytes %v\n", err)
+		os.Exit(1)
+	}
+
+	var prettyJSON bytes.Buffer
+	error := json.Indent(&prettyJSON, b, "", "\t")
+	if error != nil {
+		fmt.Fprintf(os.Stderr, "Error marshalling json %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Marshalled encryptedBlob: %s\n", string(prettyJSON.Bytes()))
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error unmarshalling %v\n", err)
+		os.Exit(1)
+	}
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error decrypting %v\n", err)
 		os.Exit(1)
@@ -55,7 +81,7 @@ func main() {
 		fmt.Println("======= Extend PCR  ========")
 		rwc, err := tpm2.OpenTPM(*tpmPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "can't open TPM %q: %v", tpmPath, err)
+			fmt.Fprintf(os.Stderr, "can't open TPM %q: %v", *tpmPath, err)
 			os.Exit(1)
 		}
 		defer rwc.Close()

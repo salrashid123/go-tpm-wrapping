@@ -1,4 +1,4 @@
-package tpm
+package tpmwrap
 
 import (
 	"crypto/aes"
@@ -18,15 +18,6 @@ import (
 	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
 	"google.golang.org/protobuf/proto"
-)
-
-const (
-	EnvTPMPath = "TPM_PATH"
-	EnvPCRS    = "TPM_PCRS"
-)
-
-const (
-	TPMEncrypt = iota
 )
 
 const (
@@ -78,6 +69,12 @@ func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrappin
 		s.pcrs = opts.withPCRS
 	}
 
+	switch {
+	case os.Getenv(EnvTPMPath) != "" && !opts.Options.WithDisallowEnvVars:
+		s.tpmPath = os.Getenv(EnvTPMPath)
+	case opts.withTPMPath != "":
+		s.tpmPath = opts.withTPMPath
+	}
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
 	wrapConfig.Metadata = make(map[string]string)
@@ -152,22 +149,26 @@ func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping
 	// Store current key id value
 	s.currentKeyId.Store(hex.EncodeToString(keyName))
 
-	r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
-		TpmDevice: rwc,
-		//Scheme:    backoff.NewConstantBackOff(time.Millisecond * 10),
-	})
-
-	iv := make([]byte, aes.BlockSize)
-	// or to use the random source from the tpm itself: https://github.com/salrashid123/tpmrand
-	if _, err := io.ReadFull(r, iv); err != nil {
-		return nil, errors.New("error creating initialization vector")
+	if len(env.Iv) == 0 {
+		r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
+			TpmDevice: rwc,
+			//Scheme:    backoff.NewConstantBackOff(time.Millisecond * 10),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to tpmrandreader: %v", err)
+		}
+		env.Iv = make([]byte, aes.BlockSize)
+		// or to use the random source from the tpm itself: https://github.com/salrashid123/tpmrand
+		if _, err := io.ReadFull(r, env.Iv); err != nil {
+			return nil, errors.New("error creating initialization vector")
+		}
 	}
 
 	ret := &wrapping.BlobInfo{
 		Ciphertext: env.Ciphertext,
 		Iv:         env.Iv,
 		KeyInfo: &wrapping.KeyInfo{
-			Mechanism:  TPMEncrypt,
+			Mechanism:  TPMSeal,
 			KeyId:      hex.EncodeToString(keyName),
 			WrappedKey: encrypted,
 		},
@@ -191,7 +192,7 @@ func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wra
 	// Default to mechanism used before key info was stored
 	if in.KeyInfo == nil {
 		in.KeyInfo = &wrapping.KeyInfo{
-			Mechanism: TPMEncrypt,
+			Mechanism: TPMSeal,
 		}
 	}
 
@@ -211,7 +212,7 @@ func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wra
 
 	var plaintext []byte
 	switch in.KeyInfo.Mechanism {
-	case TPMEncrypt:
+	case TPMSeal:
 		srk, err := client.StorageRootKeyRSA(rwc)
 		if err != nil {
 			return nil, fmt.Errorf("error  loading  srk %v\n", err)

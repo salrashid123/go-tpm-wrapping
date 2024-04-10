@@ -1,4 +1,4 @@
-package tpm
+package tpmwrap
 
 import (
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
@@ -47,6 +47,10 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 				opts.withTPMPath = v
 			case "pcrs":
 				opts.withPCRS = v
+			case "pcr_values":
+				opts.withPCRValues = v
+			case "encrypting_public_key":
+				opts.withEncryptingPublicKey = v
 			}
 		}
 	}
@@ -70,9 +74,11 @@ type OptionFunc func(*options) error
 // options = how options are represented
 type options struct {
 	*wrapping.Options
-	withUserAgent string
-	withTPMPath   string
-	withPCRS      string
+	withUserAgent           string
+	withTPMPath             string
+	withPCRS                string
+	withPCRValues           string
+	withEncryptingPublicKey string
 }
 
 func getDefaultOptions() options {
@@ -105,6 +111,28 @@ func WithPCRS(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withPCRS = with
+			return nil
+		})
+	}
+}
+
+// List of PCR Value
+// Multiple PCR values are comma separated (.WithPCRValues("0:123abc,7:abcae"))
+func WithPCRValues(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withPCRValues = with
+			return nil
+		})
+	}
+}
+
+// Encrypted public key
+// Multiple PCR values are comma separated (.WithPCRValues("hex_encoded_string"))
+func WithEncryptingPublicKey(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withEncryptingPublicKey = with
 			return nil
 		})
 	}

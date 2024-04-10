@@ -6,15 +6,20 @@ require (
 	github.com/google/go-tpm v0.9.0
 	github.com/google/go-tpm-tools v0.4.4
 	github.com/hashicorp/go-kms-wrapping/v2 v2.0.16
+	github.com/salrashid123/tpmrand v1.1.0
 	golang.org/x/net v0.24.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.33.0
 )
 
 require (
+	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/google/certificate-transparency-go v1.1.2 // indirect
+	github.com/google/go-attestation v0.5.0 // indirect
 	github.com/google/go-configfs-tsm v0.2.2 // indirect
 	github.com/google/go-sev-guest v0.9.3 // indirect
 	github.com/google/go-tdx-guest v0.3.1 // indirect
+	github.com/google/go-tspi v0.3.0 // indirect
 	github.com/google/logger v1.1.1 // indirect
 	github.com/google/uuid v1.3.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
