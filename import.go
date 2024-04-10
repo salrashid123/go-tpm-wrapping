@@ -247,6 +247,10 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 func getPCRMap(algo tpm.HashAlgo, expectedPCRMap string) (map[uint32][]byte, []byte, error) {
 
 	pcrMap := make(map[uint32][]byte)
+
+	if expectedPCRMap == "" {
+		return pcrMap, nil, nil
+	}
 	var hsh hash.Hash
 	// https://github.com/tpm2-software/tpm2-tools/blob/83f6f8ac5de5a989d447d8791525eb6b6472e6ac/lib/tpm2_openssl.c#L206
 	if algo == tpm.HashAlgo_SHA1 {

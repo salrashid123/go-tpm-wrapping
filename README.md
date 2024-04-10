@@ -94,10 +94,10 @@ $ tpm2_getekcertificate -X -o ECcert.bin
 
 $ openssl x509 -in ECcert.bin -inform DER -noout -text
 
-openssl  x509 -pubkey -noout -in ECcert.bin  -inform DER 
+$ openssl  x509 -pubkey -noout -in ECcert.bin  -inform DER 
 ```
 
-Copy the public key (ek to a remote host and save as `encrypting_public_key`
+Copy the public key (ek to a remote host and save as `encrypting_public_key`)
 
 On a remote machine:
 
@@ -112,7 +112,7 @@ import (
 		wrapper := tpmwrap.NewRemoteWrapper()
 		_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
 			"encrypting_public_key": hex.EncodeToString(b),
-			"pcr_values":            *pcrValues,
+			"pcr_values":            "",
 		}))
 
 		blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
@@ -123,7 +123,6 @@ import (
 ```
 
 At this point, copy `encrypted_blob` to the machine with the TPM
-
 
 On a TPM:
 
@@ -148,8 +147,7 @@ See the `example/import` folder.
 The following encrypts some data and binds it to a PCR value
 
 ```bash
-$ go run import/main.go --mode=encrypt  --encrypting_public_key=/tmp/ek.pem  \
-   --pcrValues="23:f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b" \
+$ go run import/main.go --mode=encrypt  --encrypting_public_key=/tmp/ek.pem   \
    --encrypted_blob=/tmp/encrypted.dat
 
 # now copy scp /tmp/encrypted.dat to VM
@@ -160,9 +158,12 @@ Then on a machine with the TPM, run
 ```bash
 go run import/main.go --mode=decrypt  --encrypted_blob=/tmp/encrypted.dat
 ```
+
 This will decrypt the data
 
-Note, if you extend the PCR value successively, 
+Note, if you encrypted the data to a pcr value, extend the PCR value successively will invalidate the key
+
+eg, if the remote system has the following PCRs
 
 ```bash
 $ tpm2_pcrread sha256:23
@@ -172,6 +173,19 @@ $ tpm2_pcrextend 23:sha256=0x000000000000000000000000000000000000000000000000000
 $ tpm2_pcrread sha256:23
   sha256:
     23: 0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
+```
+
+you can encrypt the data and bind it to that PCR:
+
+```bash
+$ go run import/main.go --mode=encrypt  --encrypting_public_key=/tmp/ek.pem  \
+   --pcrValues="23:f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b" \
+   --encrypted_blob=/tmp/encrypted.dat
+```
+
+but if you extend it, you can no longer decrypt 
+
+```bash
 $ tpm2_pcrextend 23:sha256=0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
 $ tpm2_pcrread sha256:23
   sha256:
