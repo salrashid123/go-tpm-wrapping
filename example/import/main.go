@@ -37,8 +37,8 @@ func main() {
 
 		wrapper := tpmwrap.NewRemoteWrapper()
 		_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-			"encrypting_public_key": hex.EncodeToString(b),
-			"pcr_values":            *pcrValues,
+			tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
+			tpmwrap.PCR_VALUES:            *pcrValues,
 		}))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -77,7 +77,7 @@ func main() {
 
 		wrapper := tpmwrap.NewRemoteWrapper()
 		_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-			"tpm_path": *tpmPath,
+			tpmwrap.TPM_PATH: *tpmPath,
 		}))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)

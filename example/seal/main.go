@@ -31,8 +31,8 @@ func main() {
 	ctx := context.Background()
 	wrapper := tpmwrap.NewWrapper()
 	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		"tpm_path": *tpmPath,
-		"pcrs":     *pcrs,
+		tpmwrap.TPM_PATH: *tpmPath,
+		tpmwrap.PCRS:     *pcrs,
 	}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)

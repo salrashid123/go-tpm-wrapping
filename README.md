@@ -40,8 +40,8 @@ import (
 
 	wrapper := tpmwrap.NewWrapper()
 	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		"tpm_path": "/dev/tpm0",
-		"pcrs":     "23",
+		tpmwrap.TPM_PATH: "/dev/tpm0",
+		tpmwrap.PCRS:     "23",
 	}))
 
 	blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
@@ -111,8 +111,8 @@ import (
 
 		wrapper := tpmwrap.NewRemoteWrapper()
 		_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-			"encrypting_public_key": hex.EncodeToString(b),
-			"pcr_values":            "",
+			tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
+			tpmwrap.PCR_VALUES:            "",
 		}))
 
 		blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))

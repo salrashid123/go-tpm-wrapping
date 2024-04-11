@@ -78,8 +78,8 @@ func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrappin
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
 	wrapConfig.Metadata = make(map[string]string)
-	wrapConfig.Metadata["tpm_path"] = s.tpmPath
-	wrapConfig.Metadata["pcrs"] = s.pcrs
+	wrapConfig.Metadata[TPM_PATH] = s.tpmPath
+	wrapConfig.Metadata[PCRS] = s.pcrs
 	return wrapConfig, nil
 }
 
