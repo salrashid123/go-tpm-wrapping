@@ -1,6 +1,8 @@
 package tpmwrap
 
 import (
+	"io"
+
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 )
 
@@ -76,6 +78,7 @@ type options struct {
 	*wrapping.Options
 	withUserAgent           string
 	withTPMPath             string
+	withTPM                 io.ReadWriteCloser
 	withPCRS                string
 	withPCRValues           string
 	withEncryptingPublicKey string
@@ -100,6 +103,16 @@ func WithTPMPath(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withTPMPath = with
+			return nil
+		})
+	}
+}
+
+// An actual TPM readcloser object pointer
+func WithTPM(with io.ReadWriteCloser) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withTPM = with
 			return nil
 		})
 	}

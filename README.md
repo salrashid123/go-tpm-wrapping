@@ -20,7 +20,7 @@ There are two modes to using this library:
 
   To use this, you do not need a TPM to encrypt but you DO need a TPM to decrypt.
 
-  This mode utilizes a TPM Endorsement Public Key (EKPub) to wrap the encryption key which can ONLY get decrypted by the TPM that owns the EKPub
+  This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the encryption key which can ONLY get decrypted by the TPM that owns the EKPub
 
   see [Remote Sealed TPM Import](https://github.com/salrashid123/gcp_tpm_sealed_keys/tree/main?tab=readme-ov-file#sealed-symmetric-key)
 
@@ -43,6 +43,9 @@ import (
 		tpmwrap.TPM_PATH: "/dev/tpm0",
 		tpmwrap.PCRS:     "23",
 	}))
+
+	// or as options
+	// _, err := wrapper.SetConfig(ctx,tpmwrap.WithTPMPath("/dev/tpm0"), tpmwrap.WithPCRS("23"))	
 
 	blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
 
@@ -90,10 +93,12 @@ The ekPub [can be extracted](https://github.com/salrashid123/tpm2/tree/master/ek
 To use `tpm2_tools` on the target machine
 
 ```bash
+$ tpm2_createek -c primary.ctx -G rsa -u ek.pub -Q
+$ tpm2_readpublic -c primary.ctx -o ek.pem -f PEM -Q
+
+## or from the ekcertt
 $ tpm2_getekcertificate -X -o ECcert.bin
-
 $ openssl x509 -in ECcert.bin -inform DER -noout -text
-
 $ openssl  x509 -pubkey -noout -in ECcert.bin  -inform DER 
 ```
 
@@ -212,3 +217,18 @@ gcloud compute  instances create   tpm-device  \
 gcloud compute instances get-shielded-identity  tpm-device --format="value(encryptionKey.ekPub)" > /tmp/ek.pem
 ```
 
+### External or library managed TPM reference
+
+You have the option to allow the library to manage the TPM device or provide one externally.
+
+Its preferable to allow the library to manage the device so the examples above shows that by default.
+
+For external management, pass a handle as options.
+
+```golang
+	rwc, err := tpm2.OpenTPM("/dev/tpm0")
+
+	_, err = wrapper.SetConfig(ctx, tpmwrap.WithTPM(rwc), tpmwrap.WithPCRS("23"))
+```
+
+since the device is not a string, you cannot set this as env-var or as a string config option; you must use `tpmwrap.WithTPM()`

@@ -29,6 +29,7 @@ const (
 //	Values here are set using setConfig or options
 type Wrapper struct {
 	tpmPath      string
+	tpmDevice    io.ReadWriteCloser
 	pcrs         string
 	userAgent    string
 	currentKeyId *atomic.Value
@@ -75,6 +76,14 @@ func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrappin
 	case opts.withTPMPath != "":
 		s.tpmPath = opts.withTPMPath
 	}
+
+	if opts.withTPM != nil {
+		if s.tpmPath != "" {
+			return nil, fmt.Errorf("cannot specify both TPMPath and TPMDevice")
+		}
+		s.tpmDevice = opts.withTPM
+	}
+
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
 	wrapConfig.Metadata = make(map[string]string)
@@ -97,11 +106,17 @@ func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping
 		return nil, errors.New("given plaintext for encryption is nil")
 	}
 
-	rwc, err := tpm2.OpenTPM(s.tpmPath)
-	if err != nil {
-		return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+	var rwc io.ReadWriteCloser
+	if s.tpmDevice != nil {
+		rwc = s.tpmDevice
+	} else {
+		var err error
+		rwc, err = tpm2.OpenTPM(s.tpmPath)
+		if err != nil {
+			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+		}
+		defer rwc.Close()
 	}
-	defer rwc.Close()
 
 	env, err := wrapping.EnvelopeEncrypt(plaintext, opt...)
 	if err != nil {
@@ -183,11 +198,17 @@ func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wra
 		return nil, fmt.Errorf("given ciphertext for decryption is nil")
 	}
 
-	rwc, err := tpm2.OpenTPM(s.tpmPath)
-	if err != nil {
-		return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+	var rwc io.ReadWriteCloser
+	if s.tpmDevice != nil {
+		rwc = s.tpmDevice
+	} else {
+		var err error
+		rwc, err = tpm2.OpenTPM(s.tpmPath)
+		if err != nil {
+			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+		}
+		defer rwc.Close()
 	}
-	defer rwc.Close()
 
 	// Default to mechanism used before key info was stored
 	if in.KeyInfo == nil {

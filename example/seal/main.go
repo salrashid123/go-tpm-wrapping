@@ -39,6 +39,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// if externally managed device
+	// rwc, err := tpm2.OpenTPM(*tpmPath)
+	// _, err = wrapper.SetConfig(ctx, tpmwrap.WithTPM(rwc))
+
 	blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)
@@ -54,8 +58,8 @@ func main() {
 	}
 
 	var prettyJSON bytes.Buffer
-	error := json.Indent(&prettyJSON, b, "", "\t")
-	if error != nil {
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error marshalling json %v\n", err)
 		os.Exit(1)
 	}

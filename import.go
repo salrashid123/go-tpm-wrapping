@@ -36,6 +36,7 @@ const (
 //	Values here are set using setConfig or options
 type RemoteWrapper struct {
 	tpmPath             string
+	tpmDevice           io.ReadWriteCloser
 	pcrs                string
 	userAgent           string
 	currentKeyId        *atomic.Value
@@ -90,6 +91,13 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		s.pcrValues = os.Getenv(EnvPCRValues)
 	case opts.withPCRValues != "":
 		s.pcrValues = opts.withPCRValues
+	}
+
+	if opts.withTPM != nil {
+		if s.tpmPath != "" {
+			return nil, fmt.Errorf("cannot specify both TPMPath and TPMDevice")
+		}
+		s.tpmDevice = opts.withTPM
 	}
 
 	// Map that holds non-sensitive configuration info to return
@@ -185,11 +193,17 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		return nil, fmt.Errorf("given ciphertext for decryption is nil")
 	}
 
-	rwc, err := tpm2.OpenTPM(s.tpmPath)
-	if err != nil {
-		return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+	var rwc io.ReadWriteCloser
+	if s.tpmDevice != nil {
+		rwc = s.tpmDevice
+	} else {
+		var err error
+		rwc, err = tpm2.OpenTPM(s.tpmPath)
+		if err != nil {
+			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+		}
+		defer rwc.Close()
 	}
-	defer rwc.Close()
 
 	// Default to mechanism used before key info was stored
 	if in.KeyInfo == nil {
