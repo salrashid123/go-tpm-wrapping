@@ -82,11 +82,9 @@ Decrypt:
 	fmt.Printf("Decrypted %s\n", string(plaintext))
 ```
 
-See the `example` folder for an example:
+To use as a CLI, you can run `cmd/main.go` or download from the `Releases` page.  If you want to use as an API, see the `example` folder
 
 ```bash
-cd example
-
 ## encrypt/decrypt
 $ go run cmd/main.go --mode=seal --debug \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
@@ -94,7 +92,6 @@ $ go run cmd/main.go --mode=seal --debug \
 
 $ go run cmd/main.go --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
-
 
 ## encrypt/decrypt with passphrase
 $ go run cmd/main.go --mode=seal --debug \
@@ -178,7 +175,7 @@ $ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
 
 To use this mode, you must first acquire the `Endorsement Public Key (ekPub)`. 
 
-The ekPub [can be extracted](https://github.com/salrashid123/tpm2/tree/master/ek_import_blob) from the Endorsement Certificate on a TPM or on GCE, via an API.
+The ekPub [can be extracted](https://github.com/salrashid123/tpm2/tree/master/ek_import_blob) from the `Endorsement Certificate` on a TPM or on GCE, via an API.
 
 To use `tpm2_tools` on the target machine (the one where you want to transfer a key *to*)
 
@@ -187,9 +184,9 @@ $ tpm2_createek -c /tmp/primaryB.ctx -G rsa -u /tmp/ekB.pub -Q
 $ tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -f PEM -Q
 
 ## or from the ekcert
-$ tpm2_getekcertificate -X -o /tmp/ECcert.bin
-$ openssl x509 -in /tmp/ECcert.bin -inform DER -noout -text
-$ openssl x509 -pubkey -noout -in /tmp/ECcert.bin  -inform DER 
+# $ tpm2_getekcertificate -X -o /tmp/ECcert.bin
+# $ openssl x509 -in /tmp/ECcert.bin -inform DER -noout -text
+# $ openssl x509 -pubkey -noout -in /tmp/ECcert.bin  -inform DER 
 ```
 
 Copy the public key to the host you want to transfer they key *from*.  This is the `encrypting_public_key`
