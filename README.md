@@ -391,21 +391,22 @@ The following details some background how each of these modes works:
 
 To transfer a secret from `TPM-A` to `TPM-B` with userAuth
 
-* TPM-B: create `ekpubB.pem`
+* `TPM-B`: create `ekpubB.pem`
 *   copy `ekpubB.pem` to `TPM-A`
 * on `TPM-A`:
-* - create a trial session with `PolicyDuplicateSelect` using `TPM-A`'s ekpub
+* - create a trial session with `PolicyDuplicateSelect` using `TPM-B`'s ekpub
 * - create an AES key on `TPM-A` with authPolicy (userAuth) and the trial session.
 * - use the AES key to encrypt the DEK
 * - duplicate the TPM based key using the `Policyduplicateselect` and a real session
 
-copy the duplicated key to `TPM-A`
+copy the duplicated key and wrapped DEK to `TPM-B`
 
-* create a real session with `PolicySecret` (since we used the EndorsementKey)
-* Import and Load the duplicated key with the policy
-* Use the TPM-based key, specify the userAuth and decrypt the DEK
+* on `TPM-B`:
+* - create a real session with `PolicySecret` (since we used the EndorsementKey)
+* - Import and Load the duplicated key with the policy
+* - Use the TPM-based key, specify the userAuth and decrypt the DEK
 
-To transfer a secret from `TPM-A` to `TPM-B` with PCRPolicy
+To transfer a secret from `TPM-A` to `TPM-B` with `PCRPolicy`
 
 * TPM-B: create `ekpubB.pem`
 *   copy `ekpubB.pem` to `TPM-A`
@@ -413,18 +414,18 @@ To transfer a secret from `TPM-A` to `TPM-B` with PCRPolicy
 * - create random local (non-tpm) AES key
 * - create an AES key on `TPM-A` without any policy or auth where the sensitive part is the AES key above
 * - use the AES key to encrypt the DEK
-* - create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-A`'s ekpub)
+* - create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-B`'s ekpub)
 * - create a NEW AES key on `TPM-A` with the original random AES key as the sensitive bit and the AuthPolicy using the `PolicyOR` above.
-* - create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-A`
+* - create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-B`
 * - duplicate the key
 
-copy the duplicated key to `TPM-A`
+copy the duplicated key to `TPM-B`
 
-* Create a `PolicyOR` with `PolicyPCR` and `PolicyDuplicateSelect` that match what is expected
-* Import the duplicated key
-* Decrypt the KEK using the TPM-based duplicated key
-* Use the KEK to decrypt the DEK
-
+* on `TPM-B`
+* - Create a `PolicyOR` with `PolicyPCR` and `PolicyDuplicateSelect` that match what is expected
+* - Import the duplicated key
+* - Decrypt the KEK using the TPM-based duplicated key (eg the AES key)
+* - Use the KEK to decrypt the DEK
 
 ---
 
