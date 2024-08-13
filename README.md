@@ -1,10 +1,10 @@
-
 ## Go-TPM-Wrapping - Go library for encrypting values through Trusted Platform Module (TPM)
 
-Library to encrypt and decrypt data using a wrapping key thats encoded inside a Trusted Platform Module (TPM).
+Library to encrypt and decrypt data using a wrapping key thats encoded inside a `Trusted Platform Module (TPM)`.
 
-In other words, you *must* have access to the TPM that encrypted the data to decrypt the wrapping key
+In other words, you *must* have access to a specific TPM decrypt the wrapping key.
 
+In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase (`userAuth`) or if the target system has certain `PCR` values.
 
 There are two modes to using this library:
 
@@ -18,19 +18,28 @@ There are two modes to using this library:
 
 * Remote encryption
 
-  To use this, you do not need a TPM to encrypt but you DO need a TPM to decrypt.
-
   This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the encryption key which can ONLY get decrypted by the TPM that owns the EKPub
 
-  see [Remote Sealed TPM Import](https://github.com/salrashid123/gcp_tpm_sealed_keys/tree/main?tab=readme-ov-file#sealed-symmetric-key)
+  This mode requires local access to a real or simulated TPM to encrypt the data.
 
-This is a a variation of [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping)
+
+This library is a a variation of [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping)
 
 >> This library is NOT supported by google
+
+---
+
+Examples below uses two [software TPMs](https://manpages.debian.org/testing/swtpm/swtpm.8.en.html) (`--tpm-path="127.0.0.1:2321"`).  IRL you'd use actual TPMs (`--tpm-path="/dev/tpm0"`).
+
+To configure the software TPM on your laptop for testing, see the `Using swtpm` section below.
+
+---
 
 ### Usage Seal
 
 To use, simply initialize the wrapper as shown below, specify a path to the TPM and optionally the PCR values to bind against
+
+Encrypt:
 
 ```golang
 import (
@@ -39,19 +48,37 @@ import (
 )
 
 	wrapper := tpmwrap.NewWrapper()
+
 	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH: "/dev/tpm0",
-		tpmwrap.PCRS:     "23",
+		tpmwrap.TPM_PATH:   *tpmPath,
+		// tpmwrap.PCR_VALUES: *pcrValues,
+		// tpmwrap.USER_AUTH:  *userAuth,
 	}))
 
-	// or as options
-	// _, err := wrapper.SetConfig(ctx,tpmwrap.WithTPMPath("/dev/tpm0"), tpmwrap.WithPCRS("23"))	
 
-	blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
+	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 
 	fmt.Printf("Encrypted: %s\n", hex.EncodeToString(blobInfo.Ciphertext))
+```
 
-	plaintext, err := wrapper.Decrypt(ctx, blobInfo)
+Decrypt:
+
+```golang
+	wrapper := tpmwrap.NewWrapper()
+
+	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
+		tpmwrap.TPM_PATH:   *tpmPath,
+		// tpmwrap.PCR_VALUES: *pcrValues,
+		// tpmwrap.USER_AUTH:  *userAuth,
+	}))
+
+	b, err := os.ReadFile(*encryptedBlob)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+
 	fmt.Printf("Decrypted %s\n", string(plaintext))
 ```
 
@@ -61,48 +88,111 @@ See the `example` folder for an example:
 cd example
 
 ## encrypt/decrypt
-$ go run seal/main.go 
-Encrypted: d67b83180ae269a148cb86c2bd69d0cfba55d4
-Decrypted foo
+$ go run cmd/main.go --mode=seal --debug \
+   --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --tpm-path="127.0.0.1:2321"
 
-## encrypt/decrypt and bind the data to the current values in
-### PCR banks 16,23
-$ go run seal/main.go --pcrs=16,23
-Encrypted: 19d1fd5fefeb37ec0964d2219cf7eeea4b548b
-Decrypted foo
+$ go run cmd/main.go --mode=seal --debug --decrypt=true \
+   --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
 
-## encrypt/decrypt and bind the data to the current values in
-### PCR banks 16,23
-### Extend PCR bank 23 and attempt to decrypt (which is expected to fail)
 
-$ go run seal/main.go --pcrs=16,23 --extendPCR=23
-Encrypted: e886b584b5637006134f2eb1e81d2d679eebee
-Decrypted foo
-======= Extend PCR  ========
-   Current PCR(23) e71f0aa83cc32edfbefa9f4d3e0174ca85182eec9f3a09f6a6c0df6377a510d7   
-   New PCR(23) 31206fa80a50bb6abe29085058f16212212a60eec8f049fecb92d8c8e0a84bc0Error decrypting failed to unsealing key: failed to certify PCRs: PCR 23 mismatch: expected e71f0aa83cc32edfbefa9f4d3e0174ca85182eec9f3a09f6a6c0df6377a510d7, got 31206fa80a50bb6abe29085058f16212212a60eec8f049fecb92d8c8e0a84bc0
-exit status 1
+## encrypt/decrypt with passphrase
+$ go run cmd/main.go --mode=seal --debug \
+   --dataToEncrypt=foo  --keyPass=testpass --encryptedBlob=/tmp/encrypted.json \
+   --tpm-path="127.0.0.1:2321"
+
+$ go run cmd/main.go --mode=seal --debug --keyPass=testpass --decrypt=true \
+   --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
+
+## encrypt/decrypt and bind the data to the **TPM's** values in
+### PCR banks 0,23
+
+$ tpm2_pcrread sha256:0,23
+  sha256:
+    0 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    23: 0x0000000000000000000000000000000000000000000000000000000000000000
+
+## encrypt/decrypt
+$ go run cmd/main.go --mode=seal --debug  \
+   --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --keyPass=testpass \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2321" 
+
+$ go run cmd/main.go --mode=seal --debug --decrypt=true \
+   --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2321"
+```
+
+
+to verify that pcr values are actually used, increment the PCR after which decryption will fail
+
+```bash
+# export TPM2TOOLS_TCTI="swtpm:port=2321"
+$ tpm2_pcrread sha256:23
+  sha256:
+    23: 0x0000000000000000000000000000000000000000000000000000000000000000
+$ tpm2_pcrextend 23:sha256=0000000000000000000000000000000000000000000000000000000000000000
+$ tpm2_pcrread sha256:23
+  sha256:
+    23: 0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
+
+$ go run cmd/main.go --mode=seal --debug --decrypt=true \
+   --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+    --tpm-path="127.0.0.1:2321"
+  
+  # Error decrypting executing PolicyPCR: TPM_RC_VALUE (parameter 1): value is out of range or is not correct for the context
+
+$ go run cmd/main.go --mode=seal --debug --decrypt=true \
+   --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:F5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B \
+    --tpm-path="127.0.0.1:2321"
+
+  # Error decrypting executing unseal: TPM_RC_POLICY_FAIL (session 1): a policy check failed
+```
+
+If you want to exercise the api itself, see the `examples/` folder
+
+```bash
+# no auth
+## encrypt/decrypt
+$ go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+  --tpm-path="127.0.0.1:2321"
+
+$ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+  --tpm-path="127.0.0.1:2321"
+
+# password and pcr
+$ go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --userAuth=abc --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+    --tpm-path="127.0.0.1:2321"
+
+$ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+   --userAuth=abc  --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+    --tpm-path="127.0.0.1:2321"
 ```
 
 ### Usage Import
 
-To use this mode, you must first acquire the Endorsement Public Key (ekPub). 
+To use this mode, you must first acquire the `Endorsement Public Key (ekPub)`. 
 
 The ekPub [can be extracted](https://github.com/salrashid123/tpm2/tree/master/ek_import_blob) from the Endorsement Certificate on a TPM or on GCE, via an API.
 
-To use `tpm2_tools` on the target machine
+To use `tpm2_tools` on the target machine (the one where you want to transfer a key *to*)
 
 ```bash
-$ tpm2_createek -c primary.ctx -G rsa -u ek.pub -Q
-$ tpm2_readpublic -c primary.ctx -o ek.pem -f PEM -Q
+$ tpm2_createek -c /tmp/primaryB.ctx -G rsa -u /tmp/ekB.pub -Q
+$ tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -f PEM -Q
 
-## or from the ekcertt
-$ tpm2_getekcertificate -X -o ECcert.bin
-$ openssl x509 -in ECcert.bin -inform DER -noout -text
-$ openssl  x509 -pubkey -noout -in ECcert.bin  -inform DER 
+## or from the ekcert
+$ tpm2_getekcertificate -X -o /tmp/ECcert.bin
+$ openssl x509 -in /tmp/ECcert.bin -inform DER -noout -text
+$ openssl x509 -pubkey -noout -in /tmp/ECcert.bin  -inform DER 
 ```
 
-Copy the public key (ek to a remote host and save as `encrypting_public_key`)
+Copy the public key to the host you want to transfer they key *from*.  This is the `encrypting_public_key`
 
 On a remote machine:
 
@@ -112,123 +202,269 @@ import (
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
 )
 
-		b, err := os.ReadFile(*encrypting_public_key)
+	wrapper := tpmwrap.NewRemoteWrapper()
 
-		wrapper := tpmwrap.NewRemoteWrapper()
-		_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-			tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-			tpmwrap.PCR_VALUES:            "",
-		}))
+	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
+		tpmwrap.TPM_PATH:              *tpmPath,
+		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
+		// tpmwrap.PCR_VALUES:            *pcrValues,
+		// tpmwrap.USER_AUTH:             *userAuth,
+	}))
 
-		blobInfo, err := wrapper.Encrypt(ctx, []byte("foo"))
+	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 
-		eb, err := protojson.Marshal(blobInfo)
+	eb, err := protojson.Marshal(blobInfo)
 
-		err = os.WriteFile(*encrypted_blob, eb, 0644)
+	fmt.Printf("Encrypted: %s\n", hex.EncodeToString(blobInfo.Ciphertext))
 ```
 
-At this point, copy `encrypted_blob` to the machine with the TPM
-
-On a TPM:
+At this point, copy `encrypted_blob` to the machine where you want to transfer a key *to*
 
 ```golang
-		wrapper := tpmwrap.NewRemoteWrapper()
-		_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-			"tpm_path": *tpmPath,
-		}))
+	wrapper := tpmwrap.NewRemoteWrapper()
 
-		eb, err := os.ReadFile(*encrypted_blob)
+	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
+		tpmwrap.TPM_PATH:              *tpmPath,
+		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
+		// tpmwrap.PCR_VALUES:            *pcrValues,
+		// tpmwrap.USER_AUTH:             *userAuth,
+	}))
 
-		newBlobInfo := &wrapping.BlobInfo{}
-		err = protojson.Unmarshal(eb, newBlobInfo)
+	eb, err := os.ReadFile(*encryptedBlob)
 
-		plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
-		fmt.Printf("Decrypted %s\n", string(plaintext))
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(eb, newBlobInfo)
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+
+	fmt.Printf("Decrypted %s\n", string(plaintext))
 
 ```
 
-See the `example/import` folder.
+Just to note, you don't *really* need access to a real, permanent TPM on the system you're transferring from.  You can even use a simulator (`--tpm-path="simulator"`)
 
-The following encrypts some data and binds it to a PCR value
+The following encrypts some data using just the remote `ekpub`
 
 ```bash
-$ go run import/main.go --mode=encrypt  --encrypting_public_key=/tmp/ek.pem   \
-   --encrypted_blob=/tmp/encrypted.dat
+## encrypt
+$ go run cmd/main.go --mode=import --debug  \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --tpm-path="127.0.0.1:2321"
 
-# now copy scp /tmp/encrypted.dat to VM
+### note, you can even encrypt the data with a --tpm-path="simulator"
+### copy scp /tmp/encrypted.json to VM
+
+## decrypt
+$ go run cmd/main.go --mode=import --debug --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
+    --encryptedBlob=/tmp/encrypted.json \
+    --tpm-path="127.0.0.1:2341" 
+```
+
+- With userAuth
+
+```bash
+$ go run cmd/main.go --mode=import --debug  \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --dataToEncrypt=foo --keyPass=bar --encryptedBlob=/tmp/encrypted.json \
+   --tpm-path="127.0.0.1:2321"
 ```
 
 Then on a machine with the TPM, run
 
 ```bash
-go run import/main.go --mode=decrypt  --encrypted_blob=/tmp/encrypted.dat
+$ go run cmd/main.go --mode=import --debug --decrypt \
+    --encryptedBlob=/tmp/encrypted.json --keyPass=bar \
+    --tpm-path="127.0.0.1:2341" 
 ```
 
-This will decrypt the data
-
-Note, if you encrypted the data to a pcr value, extend the PCR value successively will invalidate the key
-
-eg, if the remote system has the following PCRs
+- With PCR
 
 ```bash
-$ tpm2_pcrread sha256:23
+## encrypt/decrypt and bind the data to the **TPM's** values in
+### PCR banks 0,23
+
+$ tpm2_pcrread sha256:0,23
   sha256:
+    0 : 0x0000000000000000000000000000000000000000000000000000000000000000
     23: 0x0000000000000000000000000000000000000000000000000000000000000000
+
+$ go run cmd/main.go --mode=import --debug  \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --dataToEncrypt=foo  \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --encryptedBlob=/tmp/encrypted.json \
+   --tpm-path="127.0.0.1:2321"
+
+$ go run cmd/main.go --mode=import --debug --decrypt  \
+   --dataToEncrypt=foo --encrypting_public_key=/tmp/ekpubB.pem --encryptedBlob=/tmp/encrypted.json \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2341" 
+```
+
+For validation, increment the PCR value on TPM-B
+
+```bash
+export TPM2OPENSSL_TCTI="swtpm:port=2341"
+$ tpm2_pcrread sha256:0,23
+  sha256:
+    0 : 0x0000000000000000000000000000000000000000000000000000000000000000
+    23: 0x0000000000000000000000000000000000000000000000000000000000000000
+
 $ tpm2_pcrextend 23:sha256=0x0000000000000000000000000000000000000000000000000000000000000000
-$ tpm2_pcrread sha256:23
+$ tpm2_pcrread sha256:0,23
   sha256:
+    0 : 0x0000000000000000000000000000000000000000000000000000000000000000
     23: 0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
+
+# loading the value fails
+go run cmd/main.go --mode=import --decrypt  \
+   --dataToEncrypt=foo --encrypting_public_key=/tmp/ekpubB.pem --encryptedBlob=/tmp/encrypted.json \
+   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2341" 
+
+  Error decrypting error executing PolicyPCR: TPM_RC_VALUE (parameter 1): value is out of range or is not correct for the context
 ```
 
-you can encrypt the data and bind it to that PCR:
+
+If you want to exercise the api itself, see the `examples/` folder
 
 ```bash
-$ go run import/main.go --mode=encrypt  --encrypting_public_key=/tmp/ek.pem  \
-   --pcrValues="23:f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b" \
-   --encrypted_blob=/tmp/encrypted.dat
+# no auth
+$ go run import_encrypt/main.go --dataToEncrypt=foo \
+   --encryptedBlob=/tmp/encrypted.json --encrypting_public_key=/tmp/ekpubB.pem \
+   --tpm-path="127.0.0.1:2321"
+
+$ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+   --encrypting_public_key=/tmp/ekpubB.pem --tpm-path="127.0.0.1:2341"
+
+# password 
+$ go run import_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --userAuth=abc \
+   --tpm-path="127.0.0.1:2321"
+
+$ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --userAuth=abc \
+   --tpm-path="127.0.0.1:2341"
+
+# pcr 
+$ go run import_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2321"
+
+$ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+   --encrypting_public_key=/tmp/ekpubB.pem \
+   --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --tpm-path="127.0.0.1:2341"   
 ```
 
-but if you extend it, you can no longer decrypt 
+
+### Session Encryption
+
+Each operation uses encrypted sessions but by default, the library interrogates the TPM for the current EK directly.
+
+A todo is to allow the user to specify the 'name' of a trusted EK which we'd compare in code (if not match, bail, eg implement the ` --tpm-session-encrypt-with-name=` parameter shown below) 
+
+* [tpmrand Encrypted Session](https://github.com/salrashid123/tpmrand?tab=readme-ov-file#encrypted-session)]
+* [aws-tpm-process-credential Encrypted Sessions](https://github.com/salrashid123/aws-tpm-process-credential?tab=readme-ov-file#encrypted-tpm-sessions)
+* [salrashid123/tpm2/Session Encryption](https://github.com/salrashid123/tpm2/tree/master/tpm_encrypted_session)
+
+---
+
+### Background
+
+The following details some background how each of these modes works:
+
+- `Seal`
+
+  Sealing data to a TPM is pretty well known (see [tpm2_unseal](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_unseal.1.md)).  Basically you create a key where the sensitive data within that key is the actual secret.   The Key itself can have a password or pcr policy set which must get fulfilled to unseal.  In this library, the wrapping DEK is what is sealed.
+
+- `Import`
+
+   For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.
+   
+   In this specific implementation, there ar e several layers of encryption involved:
+
+
+To transfer a secret from `TPM-A` to `TPM-B` with userAuth
+
+* TPM-B: create `ekpubB.pem`
+*   copy `ekpubB.pem` to `TPM-A`
+* on `TPM-A`:
+* - create a trial session with `PolicyDuplicateSelect` using `TPM-A`'s ekpub
+* - create an AES key on `TPM-A` with authPolicy (userAuth) and the trial session.
+* - use the AES key to encrypt the DEK
+* - duplicate the TPM based key using the `Policyduplicateselect` and a real session
+
+copy the duplicated key to `TPM-A`
+
+* create a real session with `PolicySecret` (since we used the EndorsementKey)
+* Import and Load the duplicated key with the policy
+* Use the TPM-based key, specify the userAuth and decrypt the DEK
+
+To transfer a secret from `TPM-A` to `TPM-B` with PCRPolicy
+
+* TPM-B: create `ekpubB.pem`
+*   copy `ekpubB.pem` to `TPM-A`
+* on `TPM-A`:
+* - create random local (non-tpm) AES key
+* - create an AES key on `TPM-A` without any policy or auth where the sensitive part is the AES key above
+* - use the AES key to encrypt the DEK
+* - create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-A`'s ekpub)
+* - create a NEW AES key on `TPM-A` with the original random AES key as the sensitive bit and the AuthPolicy using the `PolicyOR` above.
+* - create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-A`
+* - duplicate the key
+
+copy the duplicated key to `TPM-A`
+
+* Create a `PolicyOR` with `PolicyPCR` and `PolicyDuplicateSelect` that match what is expected
+* Import the duplicated key
+* Decrypt the KEK using the TPM-based duplicated key
+* Use the KEK to decrypt the DEK
+
+
+---
+
+### Using swtpm
+
+If you want to test locally with software TPMs:
 
 ```bash
-$ tpm2_pcrextend 23:sha256=0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
-$ tpm2_pcrread sha256:23
-  sha256:
-    23: 0xDB56114E00FDD4C1F85C892BF35AC9A89289AAECB1EBD0A96CDE606A748B5D71
+### start two emulators 
+
+## TPM-A
+rm -rf /tmp/myvtpm && mkdir /tmp/myvtpm
+sudo swtpm_setup --tpmstate /tmp/myvtpm --tpm2 --create-ek-cert
+sudo swtpm socket --tpmstate dir=/tmp/myvtpm --tpm2 --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear
+
+## TPM-B
+rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2
+sudo swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert
+sudo swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear
+
+
+### For TPM-A
+export TPM2TOOLS_TCTI="swtpm:port=2321"
+export TPM2OPENSSL_TCTI="swtpm:port=2321"
+tpm2_pcrread sha256:0,23
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+tpm2_createek -c /tmp/primaryA.ctx -G rsa  -Q
+tpm2_readpublic -c /tmp/primaryA.ctx -o /tmp/ekpubA.pem -f PEM -Q
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+
+## for import create ek on TPM-B
+export TPM2TOOLS_TCTI="swtpm:port=2341"
+export TPM2OPENSSL_TCTI="swtpm:port=2341"
+tpm2_pcrread sha256:0,23
+
+tpm2_createek -c /tmp/primaryB.ctx -G rsa  -Q
+tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -f PEM -Q
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 ```
 
-and attempt to decrypt the data, it will fail with a policy check:
-
-```bash
-$ go run import/main.go --mode=decrypt  --encrypted_blob=/tmp/encrypted.dat
-Error decrypting error decrypted key error: unseal failed: session 1, error code 0x1d : a policy check failed
-exit status 1
-```
-
-As mentioned, you can acquire the ekPub for certain systems like GCP VM's via an API:
-
-```bash
-gcloud compute  instances create   tpm-device  \
-      --zone=us-central1-a --machine-type=n1-standard-1    --tags tpm  \
-	   --no-service-account  --no-scopes  \
-	   --shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
-	   --image-family=debian-11 --image-project=debian-cloud
-
-gcloud compute instances get-shielded-identity  tpm-device --format="value(encryptionKey.ekPub)" > /tmp/ek.pem
-```
-
-### External or library managed TPM reference
-
-You have the option to allow the library to manage the TPM device or provide one externally.
-
-Its preferable to allow the library to manage the device so the examples above shows that by default.
-
-For external management, pass a handle as options.
-
-```golang
-	rwc, err := tpm2.OpenTPM("/dev/tpm0")
-
-	_, err = wrapper.SetConfig(ctx, tpmwrap.WithTPM(rwc), tpmwrap.WithPCRS("23"))
-```
-
-since the device is not a string, you cannot set this as env-var or as a string config option; you must use `tpmwrap.WithTPM()`
+`swtpm` does not include a resource manager so you may need to run `tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l`

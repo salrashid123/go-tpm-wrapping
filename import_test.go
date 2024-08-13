@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"strconv"
 	"testing"
 
 	"github.com/google/go-tpm-tools/client"
@@ -85,10 +84,9 @@ func TestImportPCR(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	pcr := 23
 
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRS(strconv.Itoa(pcr)))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -134,7 +132,7 @@ func TestImportPCRFail(t *testing.T) {
 	ctx := context.Background()
 	pcr := 23
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRS(strconv.Itoa(pcr)))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")

@@ -45,13 +45,13 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 			switch k {
 			case "user_agent":
 				opts.withUserAgent = v
-			case "tpm_path":
+			case TPM_PATH:
 				opts.withTPMPath = v
-			case "pcrs":
-				opts.withPCRS = v
-			case "pcr_values":
+			case PCR_VALUES:
 				opts.withPCRValues = v
-			case "encrypting_public_key":
+			case USER_AUTH:
+				opts.withUserAuth = v
+			case ENCRYPTING_PUBLIC_KEY:
 				opts.withEncryptingPublicKey = v
 			}
 		}
@@ -76,12 +76,14 @@ type OptionFunc func(*options) error
 // options = how options are represented
 type options struct {
 	*wrapping.Options
-	withUserAgent           string
-	withTPMPath             string
-	withTPM                 io.ReadWriteCloser
-	withPCRS                string
-	withPCRValues           string
-	withEncryptingPublicKey string
+	withUserAgent             string
+	withTPMPath               string
+	withTPM                   io.ReadWriteCloser
+	withPCRValues             string
+	withUserAuth              string
+	withEncryptingPublicKey   string
+	withSessionEncryptionName string
+	withDebug                 bool
 }
 
 func getDefaultOptions() options {
@@ -93,6 +95,16 @@ func WithUserAgent(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withUserAgent = with
+			return nil
+		})
+	}
+}
+
+// WithUserAuth provides a way to chose the user agent
+func WithUserAuth(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withUserAuth = with
 			return nil
 		})
 	}
@@ -118,18 +130,7 @@ func WithTPM(with io.ReadWriteCloser) wrapping.Option {
 	}
 }
 
-// List of PCR banks to bind the key against.
-// Multiple PCR values are comma separated (.WithPCRS("16,23"))
-func WithPCRS(with string) wrapping.Option {
-	return func() interface{} {
-		return OptionFunc(func(o *options) error {
-			o.withPCRS = with
-			return nil
-		})
-	}
-}
-
-// List of PCR Value
+// List of PCR banks Value
 // Multiple PCR values are comma separated (.WithPCRValues("0:123abc,7:abcae"))
 func WithPCRValues(with string) wrapping.Option {
 	return func() interface{} {
@@ -141,11 +142,29 @@ func WithPCRValues(with string) wrapping.Option {
 }
 
 // Encrypted public key
-// Multiple PCR values are comma separated (.WithPCRValues("hex_encoded_string"))
 func WithEncryptingPublicKey(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withEncryptingPublicKey = with
+			return nil
+		})
+	}
+}
+
+// TPM Object "Name" to encrypt the os->TPM session
+func WithSessionEncryptionName(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withSessionEncryptionName = with
+			return nil
+		})
+	}
+}
+
+func WithDebug(with bool) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withDebug = with
 			return nil
 		})
 	}

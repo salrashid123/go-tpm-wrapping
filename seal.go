@@ -1,23 +1,21 @@
 package tpmwrap
 
 import (
+	"bytes"
 	"crypto/aes"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"strings"
 	"sync/atomic"
 
-	"github.com/google/go-tpm-tools/client"
-	"github.com/google/go-tpm-tools/proto/tpm"
-	"github.com/google/go-tpm/legacy/tpm2"
+	keyfile "github.com/foxboron/go-tpm-keyfiles"
+	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -27,21 +25,24 @@ const (
 // Configures and manages the TPM SRK encryption wrapper
 //
 //	Values here are set using setConfig or options
-type Wrapper struct {
+type TPMWrapper struct {
 	tpmPath      string
 	tpmDevice    io.ReadWriteCloser
-	pcrs         string
+	pcrValues    string
+	userAuth     string
 	userAgent    string
 	currentKeyId *atomic.Value
+	debug        bool
 }
 
 var (
-	_ wrapping.Wrapper = (*Wrapper)(nil)
+	_ wrapping.Wrapper = (*TPMWrapper)(nil)
 )
 
 // Initialize a TPM based encryption wrapper
-func NewWrapper() *Wrapper {
-	s := &Wrapper{
+func NewWrapper() *TPMWrapper {
+
+	s := &TPMWrapper{
 		currentKeyId: new(atomic.Value),
 	}
 	s.currentKeyId.Store("")
@@ -49,7 +50,7 @@ func NewWrapper() *Wrapper {
 }
 
 // Set the configuration options
-func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrapping.WrapperConfig, error) {
+func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrapping.WrapperConfig, error) {
 	opts, err := getOpts(opt...)
 	if err != nil {
 		return nil, err
@@ -64,10 +65,17 @@ func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrappin
 	}
 
 	switch {
-	case os.Getenv(EnvPCRS) != "" && !opts.Options.WithDisallowEnvVars:
-		s.pcrs = os.Getenv(EnvPCRS)
-	case opts.withPCRS != "":
-		s.pcrs = opts.withPCRS
+	case os.Getenv(EnvUserAuth) != "" && !opts.Options.WithDisallowEnvVars:
+		s.userAuth = os.Getenv(EnvUserAuth)
+	case opts.withUserAuth != "":
+		s.userAuth = opts.withUserAuth
+	}
+
+	switch {
+	case os.Getenv(EnvPCRValues) != "" && !opts.Options.WithDisallowEnvVars:
+		s.pcrValues = os.Getenv(EnvPCRValues)
+	case opts.withPCRValues != "":
+		s.pcrValues = opts.withPCRValues
 	}
 
 	switch {
@@ -84,24 +92,28 @@ func (s *Wrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrappin
 		s.tpmDevice = opts.withTPM
 	}
 
+	s.debug = opts.withDebug
+
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
 	wrapConfig.Metadata = make(map[string]string)
 	wrapConfig.Metadata[TPM_PATH] = s.tpmPath
-	wrapConfig.Metadata[PCRS] = s.pcrs
+	wrapConfig.Metadata[PCR_VALUES] = s.pcrValues
+	wrapConfig.Metadata[USER_AUTH] = s.userAuth
+
 	return wrapConfig, nil
 }
 
-func (s *Wrapper) Type(_ context.Context) (wrapping.WrapperType, error) {
+func (s *TPMWrapper) Type(_ context.Context) (wrapping.WrapperType, error) {
 	return WrapperTypeTPM, nil
 }
 
-func (s *Wrapper) KeyId(_ context.Context) (string, error) {
+func (s *TPMWrapper) KeyId(_ context.Context) (string, error) {
 	return s.currentKeyId.Load().(string), nil
 }
 
 // Encrypts data using a TPM's Storage Root Key (SRK)
-func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping.Option) (*wrapping.BlobInfo, error) {
+func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping.Option) (*wrapping.BlobInfo, error) {
 	if plaintext == nil {
 		return nil, errors.New("given plaintext for encryption is nil")
 	}
@@ -111,59 +123,195 @@ func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping
 		rwc = s.tpmDevice
 	} else {
 		var err error
-		rwc, err = tpm2.OpenTPM(s.tpmPath)
+		rwc, err = openTPM(s.tpmPath)
 		if err != nil {
 			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
 		}
 		defer rwc.Close()
 	}
+	rwr := transport.FromReadWriter(rwc)
 
 	env, err := wrapping.EnvelopeEncrypt(plaintext, opt...)
 	if err != nil {
 		return nil, fmt.Errorf("error wrapping data: %w", err)
 	}
 
-	var pcrList = []int{}
-	if s.pcrs != "" {
-		strpcrs := strings.Split(s.pcrs, ",")
-		for _, i := range strpcrs {
-			j, err := strconv.Atoi(i)
-			if err != nil {
-				return nil, fmt.Errorf("error converting pcr string %v", err)
-			}
-			pcrList = append(pcrList, j)
+	// first setup session encryption with the EK,
+	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
+
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: rsessIn.Handle(),
 		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: encsess.Handle(),
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	createEKRsp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr, encsess)
+	if err != nil {
+		return nil, fmt.Errorf("error creating EK Primary  %v", err)
+	}
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: createEKRsp.ObjectHandle,
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	encryptionPub, err := createEKRsp.OutPublic.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
+	}
+	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	// get the specified pcrs
+	_, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
+	if err != nil {
+		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
 	}
 
-	// Note, we only use the "current" values of the PCRs specified
-	// a TODO could be to use a user-supplied list of values
-	// [client.SealOpts](https://pkg.go.dev/github.com/google/go-tpm-tools/client#SealOpts)
-	sel := tpm2.PCRSelection{Hash: tpm2.AlgSHA256, PCRs: pcrList}
-	sOpt := client.SealOpts{
-		Current: sel,
+	// create an H2 primary; this is just for convenience. you could create any primary with auth
+	//  i'm just doing this so i can easily specify a keyfile.  A todo would be to set a owner/primary auth
+	cPrimary, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+	}.Execute(rwr, rsessIn)
+	if err != nil {
+		return nil, fmt.Errorf("can't create primary %v", err)
+	}
+	defer func() {
+		flush := tpm2.FlushContext{
+			FlushHandle: cPrimary.ObjectHandle,
+		}
+		_, err = flush.Execute(rwr)
+	}()
+
+	sess, cleanup1, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+	if err != nil {
+		return nil, fmt.Errorf("setting up trial session: %v", err)
+	}
+	defer func() {
+		if err := cleanup1(); err != nil {
+			fmt.Printf("cleaning up trial session: %v", err)
+		}
+	}()
+
+	sel := tpm2.TPMLPCRSelection{
+		PCRSelections: []tpm2.TPMSPCRSelection{
+			{
+				Hash:      tpm2.TPMAlgSHA256,
+				PCRSelect: tpm2.PCClientCompatible.PCRs(pcrList...),
+			},
+		},
 	}
 
-	srk, err := client.StorageRootKeyRSA(rwc)
+	_, err = tpm2.PolicyPCR{
+		PolicySession: sess.Handle(),
+		PcrDigest: tpm2.TPM2BDigest{
+			Buffer: pcrHash,
+		},
+		Pcrs: tpm2.TPMLPCRSelection{
+			PCRSelections: sel.PCRSelections,
+		},
+	}.Execute(rwr)
 	if err != nil {
-		return nil, fmt.Errorf("can't create srk from template: %v", err)
+		return nil, fmt.Errorf("error executing PolicyPCR: %v", err)
 	}
-	defer srk.Close()
 
-	sealed, err := srk.Seal([]byte(env.Key), sOpt)
+	_, err = tpm2.PolicyAuthValue{
+		PolicySession: sess.Handle(),
+	}.Execute(rwr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to seal: %v", err)
+		return nil, fmt.Errorf("executing PolicyAuthValue: %v", err)
 	}
-	encrypted, err := proto.Marshal(sealed)
+
+	// now that we have the pcr's set, get its digest
+	pgd, err := tpm2.PolicyGetDigest{
+		PolicySession: sess.Handle(),
+	}.Execute(rwr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode SealedBytes: %v", err)
+		return nil, fmt.Errorf("error executing PolicyGetDigest: %v", err)
 	}
-	keyName, err := srk.Name().Digest.Encode()
+
+	cCreate, err := tpm2.Create{
+		ParentHandle: tpm2.NamedHandle{
+			Handle: cPrimary.ObjectHandle,
+			Name:   cPrimary.Name,
+		},
+		InPublic: tpm2.New2B(tpm2.TPMTPublic{
+			Type:       tpm2.TPMAlgKeyedHash,
+			NameAlg:    tpm2.TPMAlgSHA256,
+			AuthPolicy: pgd.PolicyDigest, // set the pcr auth policy
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM:     true,
+				FixedParent:  true,
+				UserWithAuth: true, // allow policy based auth
+			},
+		}),
+		InSensitive: tpm2.TPM2BSensitiveCreate{
+			Sensitive: &tpm2.TPMSSensitiveCreate{
+				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
+					Buffer: []byte(env.Key), //  set the inner encryption key as the sensitive data
+				}),
+				UserAuth: tpm2.TPM2BAuth{
+					Buffer: []byte(s.userAuth), // set the key auth password
+				},
+			},
+		},
+	}.Execute(rwr, rsessIn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get keyName: %v", err)
+		return nil, fmt.Errorf("can't create object TPM  %v", err)
 	}
+
+	// now load the key
+	aKey, err := tpm2.Load{
+		ParentHandle: tpm2.NamedHandle{
+			Handle: cPrimary.ObjectHandle,
+			Name:   cPrimary.Name,
+		},
+		InPrivate: cCreate.OutPrivate,
+		InPublic:  cCreate.OutPublic,
+	}.Execute(rwr, rsessIn)
+	if err != nil {
+		return nil, fmt.Errorf("can't load object  %v", err)
+	}
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: aKey.ObjectHandle,
+		}
+		_, err = flushContextCmd.Execute(rwr)
+	}()
+
+	// create a keyfile representation (eg, a PEM format for the TPM based sealing key)
+	tkf := keyfile.NewTPMKey(
+		keyfile.OIDLoadableKey,
+		cCreate.OutPublic,
+		cCreate.OutPrivate,
+		keyfile.WithParent(tpm2.TPMHandle(tpm2.TPMRHOwner)),
+		keyfile.WithUserAuth([]byte(s.userAuth)),
+		//keyfile.WithDescription(h.Description),
+	)
+
+	b := new(bytes.Buffer)
+	err = keyfile.Encode(b, tkf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Key: %v", err)
+	}
+
 	// Store current key id value
-	s.currentKeyId.Store(hex.EncodeToString(keyName))
+	s.currentKeyId.Store(hex.EncodeToString(aKey.Name.Buffer))
 
+	// get the initialization vector
 	if len(env.Iv) == 0 {
 		r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
 			TpmDevice: rwc,
@@ -184,8 +332,8 @@ func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping
 		Iv:         env.Iv,
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMSeal,
-			KeyId:      hex.EncodeToString(keyName),
-			WrappedKey: encrypted,
+			KeyId:      hex.EncodeToString(aKey.Name.Buffer),
+			WrappedKey: b.Bytes(),
 		},
 	}
 
@@ -193,7 +341,7 @@ func (s *Wrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping
 }
 
 // Decrypt is used to decrypt the ciphertext.
-func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wrapping.Option) ([]byte, error) {
+func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wrapping.Option) ([]byte, error) {
 	if in.Ciphertext == nil {
 		return nil, fmt.Errorf("given ciphertext for decryption is nil")
 	}
@@ -203,12 +351,13 @@ func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wra
 		rwc = s.tpmDevice
 	} else {
 		var err error
-		rwc, err = tpm2.OpenTPM(s.tpmPath)
+		rwc, err = openTPM(s.tpmPath)
 		if err != nil {
 			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
 		}
 		defer rwc.Close()
 	}
+	rwr := transport.FromReadWriter(rwc)
 
 	// Default to mechanism used before key info was stored
 	if in.KeyInfo == nil {
@@ -217,44 +366,147 @@ func (s *Wrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wra
 		}
 	}
 
-	var pcrList = []int{}
-	if s.pcrs != "" {
-		strpcrs := strings.Split(s.pcrs, ",")
-		for _, i := range strpcrs {
-			j, err := strconv.Atoi(i)
-			if err != nil {
-				return nil, fmt.Errorf("error  converting pcr string %v", err)
-			}
-			pcrList = append(pcrList, j)
+	// first setup session encryption with the EK
+	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
+
+	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: encsess.Handle(),
 		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	createEKRsp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr, encsess)
+	if err != nil {
+		return nil, fmt.Errorf("error creating EK Primary  %v", err)
+	}
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: createEKRsp.ObjectHandle,
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	encryptionPub, err := createEKRsp.OutPublic.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
 
-	sel := tpm2.PCRSelection{Hash: tpm2.AlgSHA256, PCRs: pcrList}
+	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: rsessIn.Handle(),
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	// read the PCR values
+	_, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
+	if err != nil {
+		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
+	}
+
+	// create H2 template again
+	cPrimary, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+	}.Execute(rwr, rsessIn)
+	if err != nil {
+		return nil, fmt.Errorf("can't create primary %v", err)
+	}
+	defer func() {
+		flush := tpm2.FlushContext{
+			FlushHandle: cPrimary.ObjectHandle,
+		}
+		_, err = flush.Execute(rwr)
+	}()
 
 	var plaintext []byte
 	switch in.KeyInfo.Mechanism {
 	case TPMSeal:
-		srk, err := client.StorageRootKeyRSA(rwc)
-		if err != nil {
-			return nil, fmt.Errorf("error  loading  srk %v\n", err)
-		}
-		defer srk.Close()
 
-		sealed := &tpm.SealedBytes{}
-		err = proto.Unmarshal(in.KeyInfo.WrappedKey, sealed)
+		// the wrappedkey is actually the PEM format of the key we used to seal
+		regenKey, err := keyfile.Decode(in.KeyInfo.WrappedKey)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshall key: %w", err)
+			return nil, fmt.Errorf("error decrypting regenerated key: %w", err)
 		}
 
-		decrypted, err := srk.Unseal(sealed, client.UnsealOpts{
-			CertifyCurrent: sel,
-		})
+		// now load the key
+		k, err := tpm2.Load{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: cPrimary.ObjectHandle,
+				Name:   cPrimary.Name,
+			},
+			InPublic:  regenKey.Pubkey,
+			InPrivate: regenKey.Privkey,
+		}.Execute(rwr, rsessIn)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unsealing key: %w", err)
+			return nil, fmt.Errorf("executing Load: %v", err)
+		}
+		defer func() {
+			flush := tpm2.FlushContext{
+				FlushHandle: k.ObjectHandle,
+			}
+			_, err = flush.Execute(rwr)
+		}()
+
+		// create a pcr policy along with PolicyAuth Value (to account for a password)
+		// remember to set the userAuth into the auth option into the policy session (which'll include it in the final auth calculation)
+		sess2, cleanup2, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Auth([]byte(s.userAuth)), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		if err != nil {
+			return nil, fmt.Errorf("setting up policy session: %v", err)
+		}
+		defer cleanup2()
+
+		sel := tpm2.TPMLPCRSelection{
+			PCRSelections: []tpm2.TPMSPCRSelection{
+				{
+					Hash:      tpm2.TPMAlgSHA256,
+					PCRSelect: tpm2.PCClientCompatible.PCRs(pcrList...),
+				},
+			},
 		}
 
+		_, err = tpm2.PolicyPCR{
+			PolicySession: sess2.Handle(),
+			PcrDigest: tpm2.TPM2BDigest{
+				Buffer: pcrHash,
+			},
+			Pcrs: tpm2.TPMLPCRSelection{
+				PCRSelections: sel.PCRSelections,
+			},
+		}.Execute(rwr)
+		if err != nil {
+			return nil, fmt.Errorf("executing PolicyPCR: %v", err)
+		}
+
+		_, err = tpm2.PolicyAuthValue{
+			PolicySession: sess2.Handle(),
+		}.Execute(rwr)
+		if err != nil {
+			return nil, fmt.Errorf("executing PolicyAuthValue: %v", err)
+		}
+
+		// use this policy to unseal the data
+		unsealresp, err := tpm2.Unseal{
+			ItemHandle: tpm2.AuthHandle{
+				Handle: k.ObjectHandle,
+				Name:   k.Name,
+				Auth:   sess2,
+			},
+		}.Execute(rwr)
+		if err != nil {
+			return nil, fmt.Errorf("executing unseal: %v", err)
+		}
+
+		// the unsealed data is the inner encryption key
 		envInfo := &wrapping.EnvelopeInfo{
-			Key:        decrypted,
+			Key:        unsealresp.OutData.Buffer,
 			Iv:         in.Iv,
 			Ciphertext: in.Ciphertext,
 		}

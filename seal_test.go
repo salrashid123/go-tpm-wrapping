@@ -55,7 +55,7 @@ func TestSealPCR(t *testing.T) {
 	ctx := context.Background()
 
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRS("23"))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -88,7 +88,7 @@ func TestSealPCRFail(t *testing.T) {
 	ctx := context.Background()
 
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRS("23"))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -116,6 +116,72 @@ func TestSealPCRFail(t *testing.T) {
 
 	err = tpm2.PCRExtend(tpmDevice, pcrToExtend, tpm2.AlgSHA256, pcrval, "")
 	require.NoError(t, err)
+
+	_, err = wrapper.Decrypt(ctx, newBlobInfo)
+	require.Error(t, err)
+}
+
+func TestSealPassword(t *testing.T) {
+	tpmDevice, err := simulator.Get()
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	ctx := context.Background()
+
+	wrapper := NewWrapper()
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	require.NoError(t, err)
+
+	require.Equal(t, dataToSeal, plaintext)
+}
+
+func TestSealPasswordFail(t *testing.T) {
+	tpmDevice, err := simulator.Get()
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	ctx := context.Background()
+
+	wrapper := NewWrapper()
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	wrapper.userAuth = "bar"
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)
 	require.Error(t, err)
