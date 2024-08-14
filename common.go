@@ -37,12 +37,32 @@ const (
 	DEBUG = "debug"
 )
 
+type PolicyType int
+
+const (
+	PolicyType_None PolicyType = iota
+	PolicyType_UserAuth
+	PolicyType_PCR
+)
+
+func (e PolicyType) String() string {
+	switch e {
+	case PolicyType_PCR:
+		return "PolicyType_PCR"
+	case PolicyType_UserAuth:
+		return "PolicyType_UserAuth"
+	default:
+		return "PolicyType_None"
+	}
+}
+
 type DuplicateBlob struct {
-	KEK     []byte `json:"kek"`
-	IV      []byte `json:"iv"`
-	DupPub  []byte `json:"dup_pub"`
-	DupDup  []byte `json:"dup_dup"`
-	DupSeed []byte `json:"dup_seed"`
+	KEK        []byte     `json:"kek"`
+	IV         []byte     `json:"iv"`
+	DupPub     []byte     `json:"dup_pub"`
+	DupDup     []byte     `json:"dup_dup"`
+	DupSeed    []byte     `json:"dup_seed"`
+	PolicyType PolicyType `json:"policy_type"`
 }
 
 const (

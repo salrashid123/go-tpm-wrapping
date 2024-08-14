@@ -256,7 +256,16 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			return nil, fmt.Errorf("error creating inner key %v", err)
 		}
 
-		// create a TPM-based AES key and specify its to be the per-use AES key
+		// create a TPM-based AES key and specify its to be the per-use AES key.
+		//  We're doing this with two stages with two TPM AES keys with the same sensitive because the AuthPolicies i eventually need to use
+		//  a key on the local machine to wrap primarySensitive may not fulfill (PolicyDuplicate and PolicyPCR set during a trial session
+		// TODO: for the first sage (the one below createLoadedResp), you dont' _have_ to use a TPM to encrypt env.Key with primarySensitive
+		//    you could   aes.NewCipher(primarySensitive)  and  encrypt with  cipher.NewCFBEncrypter where env.Key
+		//    is the data you encode.  the final ciphertext (kek) should not include the IV (the TPM expects separate cipher and iv)
+		//    for the second stage (the one with createLoadedRespNew), you DO need to use an TPM-based AES key but its not itself used in encrypting
+		//    env.Key...it just so happens both createLoadedResp and createLoadedRespNew uses the same AES encryption key
+
+		// // create a TPM-based AES key and specify its to be the per-use AES key
 		createLoadedResp, err := tpm2.CreateLoaded{
 			ParentHandle: tpm2.AuthHandle{
 				Handle: cPrimary.ObjectHandle,
@@ -320,11 +329,15 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			return nil, fmt.Errorf("encryptSymmetric failed: %s", err)
 		}
 
-		// clear the key (we don't need this)
+		// // clear the key (we don't need this)
 		flushContextCmd := tpm2.FlushContext{
 			FlushHandle: createLoadedResp.ObjectHandle,
 		}
 		_, _ = flushContextCmd.Execute(rwr)
+
+		if s.debug {
+			fmt.Printf("Encrypted Kek %s\n", hex.EncodeToString(kek))
+		}
 
 		// at this point, we need to create a new key with the same per-use AES key
 		// but this one has an auth policy set to PCRs and used for duplication
@@ -531,7 +544,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			PHashList:     tpm2.TPMLDigest{Digests: []tpm2.TPM2BDigest{pcrpgd.PolicyDigest, dupselpgd2.PolicyDigest}},
 		}.Execute(rwr)
 		if err != nil {
-			return nil, fmt.Errorf("error setting policy commandcode %v", err)
+			return nil, fmt.Errorf("error setting policy PolicyOr %v", err)
 		}
 
 		// create the duplicate but set the Auth to the real policy.  Since we used PolicyDuplicationSelect, the
@@ -728,14 +741,24 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	}
 
+	var authType PolicyType
+	if s.pcrValues != "" {
+		authType = PolicyType_PCR
+	} else if s.userAuth != "" {
+		authType = PolicyType_UserAuth
+	} else {
+		authType = PolicyType_None
+	}
+
 	// create a struct which includes KEK which is itself encrypted by the TPM based EK
 	//  the TPM based EK can get unwrapped when the duplicate is loaded on the remote TPM
 	sealed, _ := json.Marshal(&DuplicateBlob{
-		KEK:     kek,
-		IV:      iv,
-		DupPub:  dupPub,
-		DupDup:  dupDup,
-		DupSeed: dupSeed,
+		KEK:        kek,
+		IV:         iv,
+		DupPub:     dupPub,
+		DupDup:     dupDup,
+		DupSeed:    dupSeed,
+		PolicyType: authType,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling error: %v", err)
@@ -845,6 +868,10 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		return nil, fmt.Errorf("marshaling DuplicateBlob: %v", err)
 	}
 
+	if s.debug {
+		fmt.Printf("Key PolicyType %s\n", db.PolicyType)
+	}
+
 	dupPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](db.DupPub)
 	if err != nil {
 		return nil, fmt.Errorf(" unmarshal public  %v", err)
@@ -948,6 +975,10 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 		// check if pcrValues are set or if we should use userAuth (not both)
 		if s.pcrValues != "" {
+
+			if db.PolicyType != PolicyType_PCR {
+				return nil, fmt.Errorf(" key auth policy mismatch for PCRs got [%s] ", db.PolicyType)
+			}
 
 			// create the hash values the user specified in the command line
 			_, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
