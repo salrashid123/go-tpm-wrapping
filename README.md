@@ -409,7 +409,6 @@ To transfer a secret from `TPM-A` to `TPM-B` with `PCRPolicy`
 *   copy `ekpubB.pem` to `TPM-A`
 * on `TPM-A`:
 * - create random local (non-tpm) AES key
-* - create an AES key on `TPM-A` without any policy or auth where the sensitive part is the AES key above
 * - use the AES key to encrypt the DEK
 * - create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-B`'s ekpub)
 * - create a NEW AES key on `TPM-A` with the original random AES key as the sensitive bit and the AuthPolicy using the `PolicyOR` above.

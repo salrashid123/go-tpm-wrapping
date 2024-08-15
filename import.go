@@ -2,6 +2,7 @@ package tpmwrap
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -257,83 +258,19 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		}
 
 		// create a TPM-based AES key and specify its to be the per-use AES key.
-		//  We're doing this with two stages with two TPM AES keys with the same sensitive because the AuthPolicies i eventually need to use
-		//  a key on the local machine to wrap primarySensitive may not fulfill (PolicyDuplicate and PolicyPCR set during a trial session
-		// TODO: for the first sage (the one below createLoadedResp), you dont' _have_ to use a TPM to encrypt env.Key with primarySensitive
-		//    you could   aes.NewCipher(primarySensitive)  and  encrypt with  cipher.NewCFBEncrypter where env.Key
-		//    is the data you encode.  the final ciphertext (kek) should not include the IV (the TPM expects separate cipher and iv)
-		//    for the second stage (the one with createLoadedRespNew), you DO need to use an TPM-based AES key but its not itself used in encrypting
-		//    env.Key...it just so happens both createLoadedResp and createLoadedRespNew uses the same AES encryption key
-
-		// // create a TPM-based AES key and specify its to be the per-use AES key
-		createLoadedResp, err := tpm2.CreateLoaded{
-			ParentHandle: tpm2.AuthHandle{
-				Handle: cPrimary.ObjectHandle,
-				Name:   cPrimary.Name,
-				Auth:   tpm2.PasswordAuth(nil),
-			},
-			InPublic: tpm2.New2BTemplate(&tpm2.TPMTPublic{
-				Type:    tpm2.TPMAlgSymCipher,
-				NameAlg: tpm2.TPMAlgSHA256,
-				ObjectAttributes: tpm2.TPMAObject{
-					FixedTPM:            false,
-					FixedParent:         false,
-					UserWithAuth:        true,
-					SensitiveDataOrigin: false, // needs to be false
-					Decrypt:             true,
-					SignEncrypt:         true,
-				},
-				AuthPolicy: tpm2.TPM2BDigest{},
-				Parameters: tpm2.NewTPMUPublicParms(
-					tpm2.TPMAlgSymCipher,
-					&tpm2.TPMSSymCipherParms{
-						Sym: tpm2.TPMTSymDefObject{
-							Algorithm: tpm2.TPMAlgAES,
-							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-							KeyBits: tpm2.NewTPMUSymKeyBits(
-								tpm2.TPMAlgAES,
-								tpm2.TPMKeyBits(128),
-							),
-						},
-					},
-				),
-			}),
-			InSensitive: tpm2.TPM2BSensitiveCreate{
-				Sensitive: &tpm2.TPMSSensitiveCreate{
-					Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
-						Buffer: primarySensitive, // per-use AES key
-					}),
-				},
-			},
-		}.Execute(rwr, rsessIn)
+		//  We're first using a plain aes.NewCFBEncrypter() to wrap env.Key because
+		//  we probably can't use the local TPM's to encrypt since its PCRs may not
+		//  match what we need on the target TPM (i.e, the local and target TPM's PCRs may not match)
+		byteMsg := []byte(env.Key)
+		block, err := aes.NewCipher(primarySensitive)
 		if err != nil {
-			return nil, fmt.Errorf("can't create encryption key %v", err)
+			return nil, fmt.Errorf("could not create new cipher: %v", err)
 		}
+		cipherTextWithIV := make([]byte, aes.BlockSize+len(byteMsg))
+		stream := cipher.NewCFBEncrypter(block, iv)
+		stream.XORKeyStream(cipherTextWithIV[aes.BlockSize:], byteMsg)
 
-		defer func() {
-			flushContextCmd := tpm2.FlushContext{
-				FlushHandle: createLoadedResp.ObjectHandle,
-			}
-			_, _ = flushContextCmd.Execute(rwr)
-		}()
-
-		// now use the per-use TPM based AES key to encrypt the DEK
-		keyAuth2 := tpm2.AuthHandle{
-			Handle: createLoadedResp.ObjectHandle,
-			Name:   createLoadedResp.Name,
-			Auth:   tpm2.PasswordAuth(nil),
-		}
-
-		kek, err = encryptDecryptSymmetric(rwr, keyAuth2, iv, env.Key, rsessIn, false)
-		if err != nil {
-			return nil, fmt.Errorf("encryptSymmetric failed: %s", err)
-		}
-
-		// // clear the key (we don't need this)
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: createLoadedResp.ObjectHandle,
-		}
-		_, _ = flushContextCmd.Execute(rwr)
+		kek = cipherTextWithIV[aes.BlockSize:]
 
 		if s.debug {
 			fmt.Printf("Encrypted Kek %s\n", hex.EncodeToString(kek))
