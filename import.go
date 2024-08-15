@@ -19,6 +19,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
+	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
 )
 
@@ -243,7 +244,21 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	// create an initialization vector for the inner TPM based AES key
 	iv := make([]byte, aes.BlockSize)
-	_, err = io.ReadFull(rand.Reader, iv)
+	// _, err = io.ReadFull(rand.Reader, iv)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("can't create IV %v", err)
+	// }
+
+	r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
+		TpmDevice:        rwc,
+		EncryptionHandle: createEKRsp.ObjectHandle,
+		EncryptionPub:    encryptionPub,
+	})
+	if err != nil {
+		fmt.Printf("can't create tpmrandom generator %v", err)
+	}
+
+	_, err = io.ReadFull(r, iv)
 	if err != nil {
 		return nil, fmt.Errorf("can't create IV %v", err)
 	}
@@ -253,8 +268,13 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		// first create any random per-use AES key in memory
 		primarySensitive := make([]byte, aes.BlockSize)
-		if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-			return nil, fmt.Errorf("error creating inner key %v", err)
+		// if _, err := io.ReadFull(rand.Reader, primarySensitive); err != nil {
+		// 	return nil, fmt.Errorf("error creating inner key %v", err)
+		// }
+
+		_, err = io.ReadFull(r, primarySensitive)
+		if err != nil {
+			return nil, fmt.Errorf("can't create IV %v", err)
 		}
 
 		// create a TPM-based AES key and specify its to be the per-use AES key.
