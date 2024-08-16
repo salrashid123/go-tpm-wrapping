@@ -37,34 +37,6 @@ const (
 	DEBUG = "debug"
 )
 
-type PolicyType int
-
-const (
-	PolicyType_None PolicyType = iota
-	PolicyType_UserAuth
-	PolicyType_PCR
-)
-
-func (e PolicyType) String() string {
-	switch e {
-	case PolicyType_PCR:
-		return "PolicyType_PCR"
-	case PolicyType_UserAuth:
-		return "PolicyType_UserAuth"
-	default:
-		return "PolicyType_None"
-	}
-}
-
-type DuplicateBlob struct {
-	KEK        []byte     `json:"kek"`
-	IV         []byte     `json:"iv"`
-	DupPub     []byte     `json:"dup_pub"`
-	DupDup     []byte     `json:"dup_dup"`
-	DupSeed    []byte     `json:"dup_seed"`
-	PolicyType PolicyType `json:"policy_type"`
-}
-
 const (
 	TPMSeal = iota
 	TPMImport
@@ -82,54 +54,7 @@ func openTPM(path string) (io.ReadWriteCloser, error) {
 	}
 }
 
-var (
-
-	// tpm h2 template:  https://www.hansenpartnership.com/draft-bottomley-tpm2-keys.html#name-parent
-	// printf '\x00\x00' > unique.dat
-	// tpm2_createprimary -C o -G ecc  -g sha256  -c primary.ctx -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt" -u unique.dat
-
-	ECCSRKHTemplate = tpm2.TPMTPublic{
-		Type:    tpm2.TPMAlgECC,
-		NameAlg: tpm2.TPMAlgSHA256,
-		ObjectAttributes: tpm2.TPMAObject{
-			FixedTPM:            true,
-			FixedParent:         true,
-			SensitiveDataOrigin: true,
-			UserWithAuth:        true,
-			NoDA:                true,
-			Restricted:          true,
-			Decrypt:             true,
-		},
-		Parameters: tpm2.NewTPMUPublicParms(
-			tpm2.TPMAlgECC,
-			&tpm2.TPMSECCParms{
-				Symmetric: tpm2.TPMTSymDefObject{
-					Algorithm: tpm2.TPMAlgAES,
-					KeyBits: tpm2.NewTPMUSymKeyBits(
-						tpm2.TPMAlgAES,
-						tpm2.TPMKeyBits(128),
-					),
-					Mode: tpm2.NewTPMUSymMode(
-						tpm2.TPMAlgAES,
-						tpm2.TPMAlgCFB,
-					),
-				},
-				CurveID: tpm2.TPMECCNistP256,
-			},
-		),
-		Unique: tpm2.NewTPMUPublicID(
-			tpm2.TPMAlgECC,
-			&tpm2.TPMSECCPoint{
-				X: tpm2.TPM2BECCParameter{
-					Buffer: make([]byte, 0),
-				},
-				Y: tpm2.TPM2BECCParameter{
-					Buffer: make([]byte, 0),
-				},
-			},
-		),
-	}
-)
+var ()
 
 func getPCRMap(algo tpm2.TPMAlgID, expectedPCRMap string) (map[uint][]byte, []uint, []byte, error) {
 

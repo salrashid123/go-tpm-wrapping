@@ -16,7 +16,6 @@ const ()
 
 var (
 	tpmPath               = flag.String("tpm-path", "/dev/tpm0", "Path to the TPM device (character device or a Unix socket).")
-	pcrValues             = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
 	userAuth              = flag.String("userAuth", "", "object Password")
 	encrypting_public_key = flag.String("encrypting_public_key", "", "Public Key to encrypt with")
 	encryptedBlob         = flag.String("encryptedBlob", "encrypted.json", "Encrypted Blob")
@@ -37,7 +36,6 @@ func main() {
 	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
 		tpmwrap.TPM_PATH:              *tpmPath,
 		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		tpmwrap.PCR_VALUES:            *pcrValues,
 		tpmwrap.USER_AUTH:             *userAuth,
 	}))
 	if err != nil {

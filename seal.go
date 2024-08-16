@@ -14,8 +14,10 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
+	tpmwrappb "github.com/salrashid123/go-tpm-wrapping/tpmwrappb"
 	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -26,13 +28,15 @@ const (
 //
 //	Values here are set using setConfig or options
 type TPMWrapper struct {
-	tpmPath      string
-	tpmDevice    io.ReadWriteCloser
-	pcrValues    string
-	userAuth     string
-	userAgent    string
-	currentKeyId *atomic.Value
-	debug        bool
+	tpmPath             string
+	tpmDevice           io.ReadWriteCloser
+	pcrValues           string
+	userAuth            string
+	userAgent           string
+	currentKeyId        *atomic.Value
+	keyName             string
+	encryptingPublicKey string
+	debug               bool
 }
 
 var (
@@ -83,6 +87,13 @@ func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrap
 		s.tpmPath = os.Getenv(EnvTPMPath)
 	case opts.withTPMPath != "":
 		s.tpmPath = opts.withTPMPath
+	}
+
+	switch {
+	case os.Getenv(EnvEncryptingPublicKey) != "" && !opts.Options.WithDisallowEnvVars:
+		s.encryptingPublicKey = os.Getenv(EnvEncryptingPublicKey)
+	case opts.withEncryptingPublicKey != "":
+		s.encryptingPublicKey = opts.withEncryptingPublicKey
 	}
 
 	if opts.withTPM != nil {
@@ -175,7 +186,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	// get the specified pcrs
-	_, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
+	pcrMap, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
 	if err != nil {
 		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
 	}
@@ -299,13 +310,42 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		cCreate.OutPrivate,
 		keyfile.WithParent(tpm2.TPMHandle(tpm2.TPMRHOwner)),
 		keyfile.WithUserAuth([]byte(s.userAuth)),
-		//keyfile.WithDescription(h.Description),
+		keyfile.WithDescription(s.keyName),
 	)
 
-	b := new(bytes.Buffer)
-	err = keyfile.Encode(b, tkf)
+	kfb := new(bytes.Buffer)
+	err = keyfile.Encode(kfb, tkf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Key: %v", err)
+	}
+
+	var pr []*tpmwrappb.PCRS
+	for i, k := range pcrMap {
+		pr = append(pr, &tpmwrappb.PCRS{
+			Pcr:   int32(i),
+			Value: k,
+		})
+	}
+	hasUserAuth := false
+
+	if s.userAuth != "" {
+		hasUserAuth = true
+	}
+	wrappb := &tpmwrappb.Secret{
+		Name:     s.keyName,
+		Type:     tpmwrappb.Secret_SEALED,
+		Pcrs:     pr,
+		UserAuth: hasUserAuth,
+		Key: &tpmwrappb.Secret_SealedOp{
+			&tpmwrappb.SealedKey{
+				Keyfile: kfb.Bytes(),
+			},
+		},
+	}
+
+	b, err := protojson.Marshal(wrappb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap proto Key: %v", err)
 	}
 
 	// Store current key id value
@@ -333,7 +373,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMSeal,
 			KeyId:      hex.EncodeToString(aKey.Name.Buffer),
-			WrappedKey: b.Bytes(),
+			WrappedKey: b,
 		},
 	}
 
@@ -405,12 +445,6 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
-	// read the PCR values
-	_, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
-	if err != nil {
-		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
-	}
-
 	// create H2 template again
 	cPrimary, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
@@ -430,8 +464,35 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 	switch in.KeyInfo.Mechanism {
 	case TPMSeal:
 
+		wrappb := &tpmwrappb.Secret{}
+		err := protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
+		}
+
+		var pcrList []uint
+		for _, v := range wrappb.Pcrs {
+			pcrList = append(pcrList, uint(v.Pcr))
+			if s.debug {
+				fmt.Printf("Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
+			}
+		}
+
+		if s.debug {
+			fmt.Printf("Key has password %t\n", wrappb.UserAuth)
+		}
+
+		if wrappb.Type != tpmwrappb.Secret_SEALED {
+			return nil, fmt.Errorf("incorrect keytype, expected Secret_SEALED")
+		}
+
+		pbk, ok := wrappb.GetKey().(*tpmwrappb.Secret_SealedOp)
+		if !ok {
+			return nil, fmt.Errorf("error unmarshalling tpmwrappb.Secret_SealedOp")
+		}
+
 		// the wrappedkey is actually the PEM format of the key we used to seal
-		regenKey, err := keyfile.Decode(in.KeyInfo.WrappedKey)
+		regenKey, err := keyfile.Decode(pbk.SealedOp.Keyfile)
 		if err != nil {
 			return nil, fmt.Errorf("error decrypting regenerated key: %w", err)
 		}
@@ -474,9 +535,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 
 		_, err = tpm2.PolicyPCR{
 			PolicySession: sess2.Handle(),
-			PcrDigest: tpm2.TPM2BDigest{
-				Buffer: pcrHash,
-			},
+
 			Pcrs: tpm2.TPMLPCRSelection{
 				PCRSelections: sel.PCRSelections,
 			},

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package tpmwrappb;
+
+option go_package = "github.com/salrashid123/go-tpm-wrapping/tpmwrappb";
+
+
+message Secret {
+  string name = 1;
+  KeyType type = 2;
+  enum KeyType {
+    SEALED = 0;
+    DUPLICATE = 1;
+  }
+  bool userAuth = 3;  
+  repeated PCRS pcrs = 4;  
+  oneof Key{
+      SealedKey sealed_op=5;
+      DuplicatedKey duplicated_op=6;
+  }
+}
+
+message PCRS {
+  int32 pcr = 1;
+  bytes value = 2;
+}
+
+message SealedKey {
+  bytes  keyfile = 1;
+}
+
+message DuplicatedKey {
+  string name = 1;
+  bytes kek = 2;
+  bytes iv = 3;  
+  bytes ekPub = 4;
+  bytes dupPub = 5;
+  bytes dupDup = 6;
+  bytes dupSeed = 7;
+}

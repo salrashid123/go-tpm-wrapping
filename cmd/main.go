@@ -102,9 +102,8 @@ func main() {
 
 			wrapper := tpmwrap.NewWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:   *tpmPath,
-				tpmwrap.PCR_VALUES: *pcrValues,
-				tpmwrap.USER_AUTH:  *keyPass,
+				tpmwrap.TPM_PATH:  *tpmPath,
+				tpmwrap.USER_AUTH: *keyPass,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -190,11 +189,23 @@ func main() {
 			}
 		} else {
 
+			var ekb []byte
+			if *encrypting_public_key != "" {
+				var err error
+				ekb, err = os.ReadFile(*encrypting_public_key)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error reading public encrypting key %v\n", err)
+					os.Exit(1)
+				}
+
+			}
+
 			wrapper := tpmwrap.NewRemoteWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:   *tpmPath,
-				tpmwrap.USER_AUTH:  *keyPass,
-				tpmwrap.PCR_VALUES: *pcrValues,
+				tpmwrap.TPM_PATH:              *tpmPath,
+				tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(ekb),
+				tpmwrap.USER_AUTH:             *keyPass,
+				tpmwrap.PCR_VALUES:            *pcrValues,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)

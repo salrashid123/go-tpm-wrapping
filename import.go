@@ -1,6 +1,7 @@
 package tpmwrap
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -8,7 +9,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -19,8 +19,10 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
+	tpmwrappb "github.com/salrashid123/go-tpm-wrapping/tpmwrappb"
 	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -39,6 +41,7 @@ type RemoteWrapper struct {
 	pcrValues             string
 	encryptingPublicKey   string
 	sessionEncryptionName string
+	keyName               string
 	debug                 bool
 }
 
@@ -149,7 +152,10 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf(" unable parsing encrypting public key : %v", err)
 	}
 
-	rsaPub := parsedKey.(*rsa.PublicKey)
+	rsaPub, ok := parsedKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+	}
 
 	ekPububFromPEMTemplate := tpm2.RSAEKTemplate
 
@@ -263,6 +269,21 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf("can't create IV %v", err)
 	}
 
+	// get the pcr values specified to bind against
+	pcrMap, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
+	if err != nil {
+		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
+	}
+
+	sel := tpm2.TPMLPCRSelection{
+		PCRSelections: []tpm2.TPMSPCRSelection{
+			{
+				Hash:      tpm2.TPMAlgSHA256,
+				PCRSelect: tpm2.PCClientCompatible.PCRs(pcrs...),
+			},
+		},
+	}
+
 	// if we have pcrValues set, then we're using PCRPolicy, otherwise userAuth
 	if s.pcrValues != "" {
 
@@ -298,21 +319,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		// at this point, we need to create a new key with the same per-use AES key
 		// but this one has an auth policy set to PCRs and used for duplication
-
-		// get the pcr values specified to bind against
-		_, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
-		if err != nil {
-			return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
-		}
-
-		sel := tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      tpm2.TPMAlgSHA256,
-					PCRSelect: tpm2.PCClientCompatible.PCRs(pcrs...),
-				},
-			},
-		}
 
 		// create a pcr trial session to get its digest
 		pcr_sess_trial, pcr_sess_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
@@ -698,25 +704,42 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	}
 
-	var authType PolicyType
-	if s.pcrValues != "" {
-		authType = PolicyType_PCR
-	} else if s.userAuth != "" {
-		authType = PolicyType_UserAuth
-	} else {
-		authType = PolicyType_None
+	var pr []*tpmwrappb.PCRS
+	for i, k := range pcrMap {
+		pr = append(pr, &tpmwrappb.PCRS{
+			Pcr:   int32(i),
+			Value: k,
+		})
+	}
+	hasUserAuth := false
+
+	if s.userAuth != "" {
+		hasUserAuth = true
 	}
 
-	// create a struct which includes KEK which is itself encrypted by the TPM based EK
-	//  the TPM based EK can get unwrapped when the duplicate is loaded on the remote TPM
-	sealed, _ := json.Marshal(&DuplicateBlob{
-		KEK:        kek,
-		IV:         iv,
-		DupPub:     dupPub,
-		DupDup:     dupDup,
-		DupSeed:    dupSeed,
-		PolicyType: authType,
-	})
+	wrappb := &tpmwrappb.Secret{
+		Name:     s.keyName,
+		Type:     tpmwrappb.Secret_DUPLICATE,
+		Pcrs:     pr,
+		UserAuth: hasUserAuth,
+		Key: &tpmwrappb.Secret_DuplicatedOp{
+			&tpmwrappb.DuplicatedKey{
+				Name:    s.keyName,
+				Kek:     kek,
+				EkPub:   []byte(s.encryptingPublicKey),
+				Iv:      iv,
+				DupPub:  dupPub,
+				DupDup:  dupDup,
+				DupSeed: dupSeed,
+			},
+		},
+	}
+
+	b, err := protojson.Marshal(wrappb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap proto Key: %v", err)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("marshaling error: %v", err)
 	}
@@ -742,7 +765,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMImport,
 			KeyId:      keyName,
-			WrappedKey: sealed,
+			WrappedKey: b,
 		},
 	}
 
@@ -754,10 +777,6 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 	if in.Ciphertext == nil {
 		return nil, fmt.Errorf("given ciphertext for decryption is nil")
-	}
-
-	if s.userAuth != "" && s.pcrValues != "" {
-		return nil, fmt.Errorf("both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
 	}
 
 	var rwc io.ReadWriteCloser
@@ -818,18 +837,48 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		}
 	}
 
-	// first decode the the json struct we used to store the duplicated data and TPM based per-use AES KEK
-	db := &DuplicateBlob{}
-	err = json.Unmarshal(in.KeyInfo.WrappedKey, db)
+	wrappb := &tpmwrappb.Secret{}
+	err = protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling DuplicateBlob: %v", err)
+		return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
+	}
+
+	var pcrList []uint
+	for _, v := range wrappb.Pcrs {
+		pcrList = append(pcrList, uint(v.Pcr))
+		if s.debug {
+			fmt.Printf("Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
+		}
 	}
 
 	if s.debug {
-		fmt.Printf("Key PolicyType %s\n", db.PolicyType)
+		fmt.Printf("Key has password %t\n", wrappb.UserAuth)
 	}
 
-	dupPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](db.DupPub)
+	if wrappb.Type != tpmwrappb.Secret_DUPLICATE {
+		return nil, fmt.Errorf("incorrect keytype, expected Secret_DUPLICATE")
+	}
+
+	pbk, ok := wrappb.GetKey().(*tpmwrappb.Secret_DuplicatedOp)
+	if !ok {
+		return nil, fmt.Errorf("error unmarshalling tpmwrappb.Secret_DuplicatedOp")
+	}
+
+	if s.encryptingPublicKey != "" {
+		if !bytes.Equal(pbk.DuplicatedOp.EkPub, []byte(s.encryptingPublicKey)) {
+			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected [%s] got [%s]", string(pbk.DuplicatedOp.EkPub), string([]byte(s.encryptingPublicKey)))
+		}
+	}
+
+	if s.userAuth != "" && len(wrappb.Pcrs) > 0 {
+		return nil, fmt.Errorf("both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
+	}
+
+	if s.debug {
+		fmt.Printf("Key PolicyType %s\n", wrappb.Type)
+	}
+
+	dupPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](pbk.DuplicatedOp.DupPub)
 	if err != nil {
 		return nil, fmt.Errorf(" unmarshal public  %v", err)
 	}
@@ -852,7 +901,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 			_, _ = flush.Execute(rwr)
 		}()
-		// []tpm2.AuthOption{tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...
+
 		// first create a session on the TPM which will allow use of the EK.
 		//  using EK here needs PolicySecret
 		import_sess, import_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
@@ -878,10 +927,10 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			},
 			ObjectPublic: tpm2.New2B(*dupPub),
 			Duplicate: tpm2.TPM2BPrivate{
-				Buffer: db.DupDup,
+				Buffer: pbk.DuplicatedOp.DupDup,
 			},
 			InSymSeed: tpm2.TPM2BEncryptedSecret{
-				Buffer: db.DupSeed,
+				Buffer: pbk.DuplicatedOp.DupSeed,
 			},
 		}.Execute(rwr, rsessIn)
 		if err != nil {
@@ -931,23 +980,13 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		var decrypted []byte
 
 		// check if pcrValues are set or if we should use userAuth (not both)
-		if s.pcrValues != "" {
-
-			if db.PolicyType != PolicyType_PCR {
-				return nil, fmt.Errorf(" key auth policy mismatch for PCRs got [%s] ", db.PolicyType)
-			}
-
-			// create the hash values the user specified in the command line
-			_, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
-			if err != nil {
-				return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
-			}
+		if len(pcrList) > 0 {
 
 			sel := tpm2.TPMLPCRSelection{
 				PCRSelections: []tpm2.TPMSPCRSelection{
 					{
 						Hash:      tpm2.TPMAlgSHA256,
-						PCRSelect: tpm2.PCClientCompatible.PCRs(pcrs...),
+						PCRSelect: tpm2.PCClientCompatible.PCRs(pcrList...),
 					},
 				},
 			}
@@ -960,14 +999,8 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 			defer pcr_cleanup()
 
-			if s.debug {
-				fmt.Printf("PCR Hash: %s\n", hex.EncodeToString(pcrHash))
-			}
 			_, err = tpm2.PolicyPCR{
 				PolicySession: pcr_sess.Handle(),
-				PcrDigest: tpm2.TPM2BDigest{
-					Buffer: pcrHash,
-				},
 				Pcrs: tpm2.TPMLPCRSelection{
 					PCRSelections: sel.PCRSelections,
 				},
@@ -1026,9 +1059,6 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 			_, err = tpm2.PolicyPCR{
 				PolicySession: or_sess.Handle(),
-				PcrDigest: tpm2.TPM2BDigest{
-					Buffer: pcrHash,
-				},
 				Pcrs: tpm2.TPMLPCRSelection{
 					PCRSelections: sel.PCRSelections,
 				},
@@ -1052,7 +1082,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				Auth:   or_sess,
 			}
 
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, db.IV, db.KEK, rsessIn, true)
+			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessIn, true)
 			if err != nil {
 				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
 			}
@@ -1074,7 +1104,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 
 			// decrypt the DEK
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, db.IV, db.KEK, rsessIn, true)
+			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessIn, true)
 			if err != nil {
 				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
 			}

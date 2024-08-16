@@ -6,6 +6,8 @@ In other words, you *must* have access to a specific TPM decrypt the wrapping ke
 
 In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase (`userAuth`) or if the target system has certain `PCR` values.
 
+>> **Update 8/16/24**:  changed the key format to use protobuf
+
 There are two modes to using this library:
 
 * Seal/Unseal 
@@ -68,7 +70,6 @@ Decrypt:
 
 	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
 		tpmwrap.TPM_PATH:   *tpmPath,
-		// tpmwrap.PCR_VALUES: *pcrValues,
 		// tpmwrap.USER_AUTH:  *userAuth,
 	}))
 
@@ -102,7 +103,7 @@ $ go run cmd/main.go --mode=seal --debug --keyPass=testpass --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
 
 ## encrypt/decrypt and bind the data to the **TPM's** values in
-### PCR banks 0,23
+### PCR banks 0,23 and userAuth
 
 $ tpm2_pcrread sha256:0,23
   sha256:
@@ -118,7 +119,6 @@ $ go run cmd/main.go --mode=seal --debug  \
 
 $ go run cmd/main.go --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
-   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2321"
 ```
 
@@ -137,17 +137,9 @@ $ tpm2_pcrread sha256:23
 
 $ go run cmd/main.go --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
-   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
-    --tpm-path="127.0.0.1:2321"
-  
-  # Error decrypting executing PolicyPCR: TPM_RC_VALUE (parameter 1): value is out of range or is not correct for the context
-
-$ go run cmd/main.go --mode=seal --debug --decrypt=true \
-   --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
-   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:F5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B \
     --tpm-path="127.0.0.1:2321"
 
-  # Error decrypting executing unseal: TPM_RC_POLICY_FAIL (session 1): a policy check failed
+ Error decrypting executing unseal: TPM_RC_POLICY_FAIL (session 1): a policy check failed
 ```
 
 If you want to exercise the api itself, see the `examples/` folder
@@ -167,7 +159,7 @@ $ go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted
     --tpm-path="127.0.0.1:2321"
 
 $ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
-   --userAuth=abc  --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+   --userAuth=abc  \
     --tpm-path="127.0.0.1:2321"
 ```
 
@@ -223,7 +215,6 @@ At this point, copy `encrypted_blob` to the machine where you want to transfer a
 	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
 		tpmwrap.TPM_PATH:              *tpmPath,
 		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		// tpmwrap.PCR_VALUES:            *pcrValues,
 		// tpmwrap.USER_AUTH:             *userAuth,
 	}))
 
@@ -295,7 +286,6 @@ $ go run cmd/main.go --mode=import --debug  \
 
 $ go run cmd/main.go --mode=import --debug --decrypt  \
    --dataToEncrypt=foo --encrypting_public_key=/tmp/ekpubB.pem --encryptedBlob=/tmp/encrypted.json \
-   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2341" 
 ```
 
@@ -317,10 +307,9 @@ $ tpm2_pcrread sha256:0,23
 # loading the value fails
 go run cmd/main.go --mode=import --decrypt  \
    --dataToEncrypt=foo --encrypting_public_key=/tmp/ekpubB.pem --encryptedBlob=/tmp/encrypted.json \
-   --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2341" 
 
-  Error decrypting error executing PolicyPCR: TPM_RC_VALUE (parameter 1): value is out of range or is not correct for the context
+Error decrypting EncryptSymmetric failed: TPM_RC_POLICY_FAIL (session 1): a policy check failed
 ```
 
 
@@ -354,10 +343,8 @@ $ go run import_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypt
 
 $ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
    --encrypting_public_key=/tmp/ekpubB.pem \
-   --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2341"   
 ```
-
 
 ### Session Encryption
 
@@ -368,6 +355,23 @@ A todo is to allow the user to specify the 'name' of a trusted EK which we'd com
 * [tpmrand Encrypted Session](https://github.com/salrashid123/tpmrand?tab=readme-ov-file#encrypted-session)]
 * [aws-tpm-process-credential Encrypted Sessions](https://github.com/salrashid123/aws-tpm-process-credential?tab=readme-ov-file#encrypted-tpm-sessions)
 * [salrashid123/tpm2/Session Encryption](https://github.com/salrashid123/tpm2/tree/master/tpm_encrypted_session)
+
+
+#### Build
+
+If you want to regenerate with protoc:
+
+```bash
+$ /usr/local/bin/protoc --version
+   libprotoc 25.1
+
+$ go get -u github.com/golang/protobuf/protoc-gen-go   
+
+$ /usr/local/bin/protoc -I ./ --include_imports \
+   --experimental_allow_proto3_optional --include_source_info \
+   --descriptor_set_out=tpmwrappb/wrap.proto.pb  \
+   --go_out=paths=source_relative:. tpmwrappb/wrap.proto
+```
 
 ---
 
@@ -452,7 +456,6 @@ tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 tpm2_createek -c /tmp/primaryA.ctx -G rsa  -Q
 tpm2_readpublic -c /tmp/primaryA.ctx -o /tmp/ekpubA.pem -f PEM -Q
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
-
 
 ## for import create ek on TPM-B
 export TPM2TOOLS_TCTI="swtpm:port=2341"

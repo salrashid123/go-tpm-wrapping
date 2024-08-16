@@ -3,7 +3,6 @@ package tpmwrap
 import (
 	"bytes"
 	"context"
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -28,18 +27,19 @@ func TestImport(t *testing.T) {
 	require.NoError(t, err)
 	defer ek.Close()
 
-	ekRSA, ok := ek.PublicKey().(*rsa.PublicKey)
-	require.True(t, ok)
+	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
 			Type:  "PUBLIC KEY",
-			Bytes: x509.MarshalPKCS1PublicKey(ekRSA),
+			Bytes: rb,
 		},
 	)
+	ek.Close()
 
 	ctx := context.Background()
 
-	wrapper := NewWrapper()
+	wrapper := NewRemoteWrapper()
 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)))
 	require.NoError(t, err)
 
@@ -74,18 +74,19 @@ func TestImportPCR(t *testing.T) {
 	require.NoError(t, err)
 	defer ek.Close()
 
-	ekRSA, ok := ek.PublicKey().(*rsa.PublicKey)
-	require.True(t, ok)
+	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
 			Type:  "PUBLIC KEY",
-			Bytes: x509.MarshalPKCS1PublicKey(ekRSA),
+			Bytes: rb,
 		},
 	)
+	ek.Close()
 
 	ctx := context.Background()
 
-	wrapper := NewWrapper()
+	wrapper := NewRemoteWrapper()
 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
@@ -120,18 +121,19 @@ func TestImportPCRFail(t *testing.T) {
 	require.NoError(t, err)
 	defer ek.Close()
 
-	ekRSA, ok := ek.PublicKey().(*rsa.PublicKey)
-	require.True(t, ok)
+	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
 			Type:  "PUBLIC KEY",
-			Bytes: x509.MarshalPKCS1PublicKey(ekRSA),
+			Bytes: rb,
 		},
 	)
+	ek.Close()
 
 	ctx := context.Background()
 	pcr := 23
-	wrapper := NewWrapper()
+	wrapper := NewRemoteWrapper()
 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
@@ -157,6 +159,67 @@ func TestImportPCRFail(t *testing.T) {
 	pcrToExtend := tpmutil.Handle(pcr)
 
 	err = tpm2.PCRExtend(tpmDevice, pcrToExtend, tpm2.AlgSHA256, pcrval, "")
+	require.NoError(t, err)
+
+	_, err = wrapper.Decrypt(ctx, newBlobInfo)
+	require.Error(t, err)
+}
+
+func TestImportEKFail(t *testing.T) {
+	tpmDevice, err := simulator.Get()
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	ek, err := client.EndorsementKeyRSA(tpmDevice)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	require.NoError(t, err)
+	ekpemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+	ek.Close()
+
+	badEK, err := client.NewKey(tpmDevice, tpm2.HandleNull, client.SRKTemplateRSA())
+	require.NoError(t, err)
+
+	rbb, err := x509.MarshalPKIXPublicKey(badEK.PublicKey())
+	require.NoError(t, err)
+	badekpemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rbb,
+		},
+	)
+	badEK.Close()
+
+	ctx := context.Background()
+
+	wrapper := NewRemoteWrapper()
+
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(ekpemdata)))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(badekpemdata)))
 	require.NoError(t, err)
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)

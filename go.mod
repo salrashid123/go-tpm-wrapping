@@ -12,13 +12,13 @@ require (
 	github.com/salrashid123/tpmrand v0.4.0
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/net v0.24.0
-	google.golang.org/protobuf v1.33.0
+	google.golang.org/protobuf v1.34.2
 )
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-configfs-tsm v0.2.2 // indirect
 	github.com/google/go-sev-guest v0.9.3 // indirect
 	github.com/google/go-tdx-guest v0.3.1 // indirect
