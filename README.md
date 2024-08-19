@@ -72,24 +72,30 @@ To use, simply initialize the wrapper as shown below, specify a path to the TPM 
 
 To use as a CLI, you can run `cmd/main.go` or download from the `Releases` page.  If you want to use as an API, see the `example` folder
 
+- encrypt/decrypt
 ```bash
-## encrypt/decrypt
 $ go-tpm-wrapping --mode=seal --debug \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
 
 $ go-tpm-wrapping --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
+```
 
-## encrypt/decrypt with passphrase
+- encrypt/decrypt with passphrase
+
+```bash
 $ go-tpm-wrapping --mode=seal --debug \
    --dataToEncrypt=foo  --keyPass=testpass --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
 
 $ go-tpm-wrapping --mode=seal --debug --keyPass=testpass --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
+```
 
-## encrypt/decrypt with passphrase and PCR values.  
+- encrypt/decrypt with passphrase and PCR values.  
+
+```bash
 ### for example, if you want to stipulate the following PCR values must be present to unseal
 $ tpm2_pcrread sha256:0,23
   sha256:
@@ -107,7 +113,6 @@ $ go-tpm-wrapping --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
    --tpm-path="127.0.0.1:2321"
 ```
-
 
 to verify that pcr values are actually used, increment the PCR after which decryption will fail
 
@@ -169,16 +174,21 @@ Just to note, you don't *really* need access to a real, permanent TPM on the sys
 
 The following encrypts some data using just the remote `ekpub`
 
+- encrypt/decrypt
+
 ```bash
-## encrypt
+# encrypt
 $ go-tpm-wrapping --mode=import --debug  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
 ### note, you can even encrypt the data with a --tpm-path="simulator"
-### copy scp /tmp/encrypted.json to VM
+```
 
-## decrypt
+- copy scp /tmp/encrypted.json to VM
+
+```bash
+# decrypt
 $ go-tpm-wrapping --mode=import --debug --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
     --encryptedBlob=/tmp/encrypted.json \
     --tpm-path="127.0.0.1:2341" 
@@ -187,6 +197,7 @@ $ go-tpm-wrapping --mode=import --debug --decrypt --encrypting_public_key=/tmp/e
 - With userAuth
 
 ```bash
+# encrypt
 $ go-tpm-wrapping --mode=import --debug  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --keyPass=bar --encryptedBlob=/tmp/encrypted.json \
@@ -196,6 +207,7 @@ $ go-tpm-wrapping --mode=import --debug  \
 Then on a machine with the TPM, run
 
 ```bash
+# decrypt
 $ go-tpm-wrapping --mode=import --debug --decrypt \
     --encryptedBlob=/tmp/encrypted.json --keyPass=bar \
     --tpm-path="127.0.0.1:2341" 
@@ -206,7 +218,6 @@ $ go-tpm-wrapping --mode=import --debug --decrypt \
 ```bash
 ## encrypt/decrypt and bind the data to the **destination TPM's** values in
 ### If you want the TPM where you want to decrypt to have the following PCR values
-
 $ tpm2_pcrread sha256:0,23
   sha256:
     0 : 0x0000000000000000000000000000000000000000000000000000000000000000
@@ -219,7 +230,12 @@ $ go-tpm-wrapping --mode=import --debug  \
    --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
+```
 
+then,
+
+```
+# decrypt
 ## then these PCRs are read in to decrypt on the destination
 $ go-tpm-wrapping --mode=import --debug --decrypt  \
    --dataToEncrypt=foo --encrypting_public_key=/tmp/ekpubB.pem --encryptedBlob=/tmp/encrypted.json \
