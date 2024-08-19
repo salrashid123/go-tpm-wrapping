@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm-tools/simulator"
-	"github.com/google/go-tpm/legacy/tpm2"
-	"github.com/google/go-tpm/tpmutil"
+	tpm2 "github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,8 +21,10 @@ func TestSeal(t *testing.T) {
 
 	ctx := context.Background()
 
+	keyName := "bar"
+
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithKeyName(keyName))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -43,6 +45,8 @@ func TestSeal(t *testing.T) {
 
 	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
 	require.NoError(t, err)
+
+	require.Equal(t, keyName, newBlobInfo.KeyInfo.KeyId)
 
 	require.Equal(t, dataToSeal, plaintext)
 }
@@ -107,14 +111,36 @@ func TestSealPCRFail(t *testing.T) {
 	err = protojson.Unmarshal(b, newBlobInfo)
 	require.NoError(t, err)
 
-	pcr := 23
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	pcrval, err := tpm2.ReadPCR(tpmDevice, pcr, tpm2.AlgSHA256)
+	pcr := uint(23)
+
+	pcrReadRsp, err := tpm2.PCRRead{
+		PCRSelectionIn: tpm2.TPMLPCRSelection{
+			PCRSelections: []tpm2.TPMSPCRSelection{
+				{
+					Hash:      tpm2.TPMAlgSHA256,
+					PCRSelect: tpm2.PCClientCompatible.PCRs(pcr),
+				},
+			},
+		},
+	}.Execute(rwr)
 	require.NoError(t, err)
 
-	pcrToExtend := tpmutil.Handle(pcr)
-
-	err = tpm2.PCRExtend(tpmDevice, pcrToExtend, tpm2.AlgSHA256, pcrval, "")
+	_, err = tpm2.PCRExtend{
+		PCRHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMHandle(uint32(pcr)),
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		Digests: tpm2.TPMLDigestValues{
+			Digests: []tpm2.TPMTHA{
+				{
+					HashAlg: tpm2.TPMAlgSHA256,
+					Digest:  pcrReadRsp.PCRValues.Digests[0].Buffer,
+				},
+			},
+		},
+	}.Execute(rwr)
 	require.NoError(t, err)
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)

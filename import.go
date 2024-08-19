@@ -6,7 +6,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -37,6 +36,7 @@ type RemoteWrapper struct {
 	tpmDevice             io.ReadWriteCloser
 	userAgent             string
 	userAuth              string
+	hierarchyAuth         string
 	currentKeyId          *atomic.Value
 	pcrValues             string
 	encryptingPublicKey   string
@@ -101,6 +101,20 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		s.userAuth = opts.withUserAuth
 	}
 
+	switch {
+	case os.Getenv(EnvHierarchyAuth) != "" && !opts.Options.WithDisallowEnvVars:
+		s.hierarchyAuth = os.Getenv(EnvHierarchyAuth)
+	case opts.withHierarchyAuth != "":
+		s.hierarchyAuth = opts.withHierarchyAuth
+	}
+
+	switch {
+	case os.Getenv(EnvKeyName) != "" && !opts.Options.WithDisallowEnvVars:
+		s.keyName = os.Getenv(EnvKeyName)
+	case opts.withKeyName != "":
+		s.keyName = opts.withKeyName
+	}
+
 	s.debug = opts.withDebug
 
 	// Map that holds non-sensitive configuration info to return
@@ -110,6 +124,8 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	wrapConfig.Metadata[PCR_VALUES] = s.pcrValues
 	wrapConfig.Metadata[ENCRYPTING_PUBLIC_KEY] = s.encryptingPublicKey
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
+	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
+	wrapConfig.Metadata[KEY_NAME] = s.keyName
 	return wrapConfig, nil
 }
 
@@ -125,6 +141,10 @@ func (s *RemoteWrapper) KeyId(_ context.Context) (string, error) {
 func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping.Option) (*wrapping.BlobInfo, error) {
 	if plaintext == nil {
 		return nil, errors.New("given plaintext for encryption is nil")
+	}
+
+	if s.debug {
+		fmt.Printf("Encrypting with name %s\n", s.keyName)
 	}
 
 	env, err := wrapping.EnvelopeEncrypt(plaintext, opt...)
@@ -229,11 +249,15 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	// create a generic local primary key
 	cPrimary, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate), // tpm2.New2B(ECCSRKHTemplate),
+		PrimaryHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Name:   tpm2.HandleName(tpm2.TPMRHOwner),
+			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+		},
+		InPublic: tpm2.New2B(tpm2.RSASRKTemplate), // tpm2.New2B(ECCSRKHTemplate),
 	}.Execute(rwr, rsessIn)
 	if err != nil {
-		fmt.Printf("can't create primary TPM %v", err)
+		return nil, fmt.Errorf("can't  CreatePrimary %v", err)
 	}
 
 	defer func() {
@@ -261,7 +285,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		EncryptionPub:    encryptionPub,
 	})
 	if err != nil {
-		fmt.Printf("can't create tpmrandom generator %v", err)
+		return nil, fmt.Errorf("can't create tpmrandom generator %v", err)
 	}
 
 	_, err = io.ReadFull(r, iv)
@@ -376,7 +400,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			PolicySession: dupselect_sess_trial.Handle(),
 		}.Execute(rwr)
 		if err != nil {
-			return nil, fmt.Errorf(">> error executing PolicyGetDigest: %v", err)
+			return nil, fmt.Errorf("error executing PolicyGetDigest: %v", err)
 		}
 		err = dupselect_trial_cleanup()
 		if err != nil {
@@ -417,7 +441,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			ParentHandle: tpm2.AuthHandle{
 				Handle: cPrimary.ObjectHandle,
 				Name:   cPrimary.Name,
-				Auth:   tpm2.PasswordAuth(nil),
+				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 			},
 			InPublic: tpm2.New2BTemplate(&tpm2.TPMTPublic{
 				Type:    tpm2.TPMAlgSymCipher,
@@ -613,7 +637,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		if err != nil {
 			return nil, fmt.Errorf("can't create encryption key %v", err)
 		}
-
 		defer func() {
 			flushContextCmd := tpm2.FlushContext{
 				FlushHandle: createLoadedResp.ObjectHandle,
@@ -622,7 +645,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		}()
 
 		if s.debug {
-			fmt.Printf("Key Name %s\n", hex.EncodeToString(createLoadedResp.Name.Buffer))
+			fmt.Printf("Loaded Name %s\n", hex.EncodeToString(createLoadedResp.Name.Buffer))
 		}
 		// flush parent
 		flush := tpm2.FlushContext{
@@ -744,12 +767,12 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf("marshaling error: %v", err)
 	}
 	// as convention, we'll save the public key's fingerpint/hash as the keyID
-	hasher := sha256.New()
-	hasher.Write([]byte(s.encryptingPublicKey))
-	keyName := hex.EncodeToString((hasher.Sum(nil)))
+	// hasher := sha256.New()
+	// hasher.Write([]byte(s.encryptingPublicKey))
+	// keyName := hex.EncodeToString((hasher.Sum(nil)))
 
 	// Store current key id value
-	s.currentKeyId.Store(keyName)
+	s.currentKeyId.Store(s.keyName)
 
 	if len(env.Iv) == 0 {
 		env.Iv = make([]byte, aes.BlockSize)
@@ -764,7 +787,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		Iv:         env.Iv,
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMImport,
-			KeyId:      keyName,
+			KeyId:      s.keyName,
 			WrappedKey: b,
 		},
 	}
@@ -811,8 +834,13 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	}()
 
 	createEKRsp, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHEndorsement,
-		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+		//PrimaryHandle: tpm2.TPMRHEndorsement,
+		PrimaryHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHEndorsement,
+			Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+		},
+		InPublic: tpm2.New2B(tpm2.RSAEKTemplate),
 	}.Execute(rwr, encsess)
 	if err != nil {
 		return nil, fmt.Errorf("error creating EK Primary  %v", err)
@@ -841,6 +869,10 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	err = protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
+	}
+
+	if s.debug {
+		fmt.Printf("Decrypting with name %s\n", wrappb.Name)
 	}
 
 	var pcrList []uint
@@ -889,8 +921,12 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 		// create the EK (this is the default parent key we exported to the remote TPM)
 		cPrimary, err := tpm2.CreatePrimary{
-			PrimaryHandle: tpm2.TPMRHEndorsement,
-			InPublic:      tpm2.New2B(tpm2.RSAEKTemplate), // tpm2.New2B(ECCSRKHTemplate),
+			PrimaryHandle: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHEndorsement,
+				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+			},
+			InPublic: tpm2.New2B(tpm2.RSAEKTemplate), // tpm2.New2B(ECCSRKHTemplate),
 		}.Execute(rwr, rsessIn)
 		if err != nil {
 			return nil, fmt.Errorf("can't create primary TPM %v", err)
@@ -911,7 +947,11 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		defer import_session_cleanup()
 
 		_, err = tpm2.PolicySecret{
-			AuthHandle:    tpm2.TPMRHEndorsement,
+			AuthHandle: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHEndorsement,
+				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+			},
 			PolicySession: import_sess.Handle(),
 			NonceTPM:      import_sess.NonceTPM(),
 		}.Execute(rwr, rsessIn)
@@ -949,12 +989,16 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		defer load_session_cleanup()
 
 		_, err = tpm2.PolicySecret{
-			AuthHandle:    tpm2.TPMRHEndorsement,
+			AuthHandle: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHEndorsement,
+				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+			},
 			PolicySession: load_session.Handle(),
 			NonceTPM:      load_session.NonceTPM(),
 		}.Execute(rwr)
 		if err != nil {
-			return nil, fmt.Errorf("error setting policy PolicyDuplicationSelect %v", err)
+			return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
 		}
 
 		loadkRsp, err := tpm2.Load{

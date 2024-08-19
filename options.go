@@ -51,6 +51,10 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 				opts.withPCRValues = v
 			case USER_AUTH:
 				opts.withUserAuth = v
+			case HIERARCHY_AUTH:
+				opts.withHierarchyAuth = v
+			case KEY_NAME:
+				opts.withKeyName = v
 			case ENCRYPTING_PUBLIC_KEY:
 				opts.withEncryptingPublicKey = v
 			}
@@ -81,6 +85,8 @@ type options struct {
 	withTPM                   io.ReadWriteCloser
 	withPCRValues             string
 	withUserAuth              string
+	withHierarchyAuth         string
+	withKeyName               string
 	withEncryptingPublicKey   string
 	withSessionEncryptionName string
 	withDebug                 bool
@@ -105,6 +111,26 @@ func WithUserAuth(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withUserAuth = with
+			return nil
+		})
+	}
+}
+
+// WithHierarchyAuth provides a way to set the passphrase on the hierarchy (if any)
+func WithHierarchyAuth(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withHierarchyAuth = with
+			return nil
+		})
+	}
+}
+
+// WithKeyName provides a way to set the passphrase on the hierarchy (if any)
+func WithKeyName(with string) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withKeyName = with
 			return nil
 		})
 	}

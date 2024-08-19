@@ -32,6 +32,7 @@ type TPMWrapper struct {
 	tpmDevice           io.ReadWriteCloser
 	pcrValues           string
 	userAuth            string
+	hierarchyAuth       string
 	userAgent           string
 	currentKeyId        *atomic.Value
 	keyName             string
@@ -76,6 +77,20 @@ func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrap
 	}
 
 	switch {
+	case os.Getenv(EnvHierarchyAuth) != "" && !opts.Options.WithDisallowEnvVars:
+		s.hierarchyAuth = os.Getenv(EnvHierarchyAuth)
+	case opts.withHierarchyAuth != "":
+		s.hierarchyAuth = opts.withHierarchyAuth
+	}
+
+	switch {
+	case os.Getenv(EnvKeyName) != "" && !opts.Options.WithDisallowEnvVars:
+		s.keyName = os.Getenv(EnvKeyName)
+	case opts.withKeyName != "":
+		s.keyName = opts.withKeyName
+	}
+
+	switch {
 	case os.Getenv(EnvPCRValues) != "" && !opts.Options.WithDisallowEnvVars:
 		s.pcrValues = os.Getenv(EnvPCRValues)
 	case opts.withPCRValues != "":
@@ -111,7 +126,8 @@ func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrap
 	wrapConfig.Metadata[TPM_PATH] = s.tpmPath
 	wrapConfig.Metadata[PCR_VALUES] = s.pcrValues
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
-
+	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
+	wrapConfig.Metadata[KEY_NAME] = s.keyName
 	return wrapConfig, nil
 }
 
@@ -127,6 +143,10 @@ func (s *TPMWrapper) KeyId(_ context.Context) (string, error) {
 func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping.Option) (*wrapping.BlobInfo, error) {
 	if plaintext == nil {
 		return nil, errors.New("given plaintext for encryption is nil")
+	}
+
+	if s.debug {
+		fmt.Printf("Encrypting with name %s\n", s.keyName)
 	}
 
 	var rwc io.ReadWriteCloser
@@ -194,8 +214,12 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	// create an H2 primary; this is just for convenience. you could create any primary with auth
 	//  i'm just doing this so i can easily specify a keyfile.  A todo would be to set a owner/primary auth
 	cPrimary, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+		PrimaryHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Name:   tpm2.HandleName(tpm2.TPMRHOwner),
+			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+		},
+		InPublic: tpm2.New2B(keyfile.ECCSRK_H2_Template),
 	}.Execute(rwr, rsessIn)
 	if err != nil {
 		return nil, fmt.Errorf("can't create primary %v", err)
@@ -349,7 +373,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	}
 
 	// Store current key id value
-	s.currentKeyId.Store(hex.EncodeToString(aKey.Name.Buffer))
+	s.currentKeyId.Store(s.keyName)
 
 	// get the initialization vector
 	if len(env.Iv) == 0 {
@@ -372,7 +396,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		Iv:         env.Iv,
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMSeal,
-			KeyId:      hex.EncodeToString(aKey.Name.Buffer),
+			KeyId:      s.keyName, //  hex.EncodeToString(aKey.Name.Buffer),
 			WrappedKey: b,
 		},
 	}
@@ -447,8 +471,12 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 
 	// create H2 template again
 	cPrimary, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+		PrimaryHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Name:   tpm2.HandleName(tpm2.TPMRHOwner),
+			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+		},
+		InPublic: tpm2.New2B(keyfile.ECCSRK_H2_Template),
 	}.Execute(rwr, rsessIn)
 	if err != nil {
 		return nil, fmt.Errorf("can't create primary %v", err)
@@ -468,6 +496,10 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		err := protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
+		}
+
+		if s.debug {
+			fmt.Printf("Decrypting with name %s\n", wrappb.Name)
 		}
 
 		var pcrList []uint

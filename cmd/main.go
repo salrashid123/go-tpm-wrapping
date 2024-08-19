@@ -24,10 +24,12 @@ var (
 
 	tpmPath = flag.String("tpm-path", "/dev/tpmrm0", "Path to the TPM device (character device or a Unix socket).")
 	//parentPass    = flag.String("parentPass", "", "TPM Parent Key password")
-	keyPass = flag.String("keyPass", "", "TPM Key password")
+	keyPass       = flag.String("keyPass", "", "TPM Key password")
+	hierarchyPass = flag.String("hierarchyPass", "", "TPM owner Key password")
+	keyName       = flag.String("keyName", "key1", "KeyName")
 
 	pcrValues     = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
-	dataToEncrypt = flag.String("dataToEncrypt", "foo", "data to encrypt")
+	dataToEncrypt = flag.String("dataToEncrypt", "", "data to encrypt")
 
 	decrypt = flag.Bool("decrypt", false, "set --decrypt perform decryption (default encrypt)")
 	debug   = flag.Bool("debug", false, "verbose output")
@@ -60,9 +62,11 @@ func main() {
 		if !*decrypt {
 			wrapper := tpmwrap.NewWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:   *tpmPath,
-				tpmwrap.USER_AUTH:  *keyPass,
-				tpmwrap.PCR_VALUES: *pcrValues,
+				tpmwrap.TPM_PATH:       *tpmPath,
+				tpmwrap.USER_AUTH:      *keyPass,
+				tpmwrap.PCR_VALUES:     *pcrValues,
+				tpmwrap.HIERARCHY_AUTH: *hierarchyPass,
+				tpmwrap.KEY_NAME:       *keyName,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -102,8 +106,9 @@ func main() {
 
 			wrapper := tpmwrap.NewWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:  *tpmPath,
-				tpmwrap.USER_AUTH: *keyPass,
+				tpmwrap.TPM_PATH:       *tpmPath,
+				tpmwrap.USER_AUTH:      *keyPass,
+				tpmwrap.HIERARCHY_AUTH: *hierarchyPass,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -147,7 +152,9 @@ func main() {
 				tpmwrap.TPM_PATH:              *tpmPath,
 				tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
 				tpmwrap.USER_AUTH:             *keyPass,
+				tpmwrap.HIERARCHY_AUTH:        *hierarchyPass,
 				tpmwrap.PCR_VALUES:            *pcrValues,
+				tpmwrap.KEY_NAME:              *keyName,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -205,6 +212,7 @@ func main() {
 				tpmwrap.TPM_PATH:              *tpmPath,
 				tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(ekb),
 				tpmwrap.USER_AUTH:             *keyPass,
+				tpmwrap.HIERARCHY_AUTH:        *hierarchyPass,
 				tpmwrap.PCR_VALUES:            *pcrValues,
 			}))
 			if err != nil {

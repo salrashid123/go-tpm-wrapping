@@ -11,11 +11,23 @@ import (
 
 	"github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/simulator"
-	"github.com/google/go-tpm/legacy/tpm2"
-	"github.com/google/go-tpm/tpmutil"
+	tpm2 "github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
+)
+
+const (
+	badekpem = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxy8vxeaGBgMdhcIQxnG+
+LHizNlexDpVkh3Sbe86c8FzxaxJi7Gj7MuQrc7YXRfZlROfSVg41Nbd/5EeQQdnP
+I7jW1/2+QF1NUOim3Y1exOY+oQvGwiTPfyG47O1DFUmiJYiQ93DOq261y+cCRJ6c
+sbLWjIDzJRPuNZ4mSzaeeXHjexHy5Gkp1OTPcKbvRGb9q+Z4xf1PVlBV3x22ykKx
+UdLg8tf2ZvOtc6H8i3D26Nmx8nSROk9HtegMLcrG7RHrmhoqGH/3ug8/S3SlyI2k
+YgQz8rsK1ZoGdOmeOIm7FHUwA1TZfXDMIAzIygAD2PDUHVKAlhumT2lB9hWkkwDT
+wwIDAQAB
+-----END PUBLIC KEY-----`
 )
 
 func TestImport(t *testing.T) {
@@ -39,8 +51,10 @@ func TestImport(t *testing.T) {
 
 	ctx := context.Background()
 
+	keyName := "bar"
+
 	wrapper := NewRemoteWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -61,6 +75,8 @@ func TestImport(t *testing.T) {
 
 	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
 	require.NoError(t, err)
+
+	require.Equal(t, keyName, newBlobInfo.KeyInfo.KeyId)
 
 	require.Equal(t, dataToSeal, plaintext)
 }
@@ -132,7 +148,7 @@ func TestImportPCRFail(t *testing.T) {
 	ek.Close()
 
 	ctx := context.Background()
-	pcr := 23
+	pcr := uint(23)
 	wrapper := NewRemoteWrapper()
 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
@@ -153,12 +169,34 @@ func TestImportPCRFail(t *testing.T) {
 	err = protojson.Unmarshal(b, newBlobInfo)
 	require.NoError(t, err)
 
-	pcrval, err := tpm2.ReadPCR(tpmDevice, pcr, tpm2.AlgSHA256)
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	pcrReadRsp, err := tpm2.PCRRead{
+		PCRSelectionIn: tpm2.TPMLPCRSelection{
+			PCRSelections: []tpm2.TPMSPCRSelection{
+				{
+					Hash:      tpm2.TPMAlgSHA256,
+					PCRSelect: tpm2.PCClientCompatible.PCRs(pcr),
+				},
+			},
+		},
+	}.Execute(rwr)
 	require.NoError(t, err)
 
-	pcrToExtend := tpmutil.Handle(pcr)
-
-	err = tpm2.PCRExtend(tpmDevice, pcrToExtend, tpm2.AlgSHA256, pcrval, "")
+	_, err = tpm2.PCRExtend{
+		PCRHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMHandle(uint32(pcr)),
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		Digests: tpm2.TPMLDigestValues{
+			Digests: []tpm2.TPMTHA{
+				{
+					HashAlg: tpm2.TPMAlgSHA256,
+					Digest:  pcrReadRsp.PCRValues.Digests[0].Buffer,
+				},
+			},
+		},
+	}.Execute(rwr)
 	require.NoError(t, err)
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)
@@ -183,19 +221,6 @@ func TestImportEKFail(t *testing.T) {
 	)
 	ek.Close()
 
-	badEK, err := client.NewKey(tpmDevice, tpm2.HandleNull, client.SRKTemplateRSA())
-	require.NoError(t, err)
-
-	rbb, err := x509.MarshalPKIXPublicKey(badEK.PublicKey())
-	require.NoError(t, err)
-	badekpemdata := pem.EncodeToMemory(
-		&pem.Block{
-			Type:  "PUBLIC KEY",
-			Bytes: rbb,
-		},
-	)
-	badEK.Close()
-
 	ctx := context.Background()
 
 	wrapper := NewRemoteWrapper()
@@ -219,7 +244,7 @@ func TestImportEKFail(t *testing.T) {
 	err = protojson.Unmarshal(b, newBlobInfo)
 	require.NoError(t, err)
 
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(badekpemdata)))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString([]byte(badekpem))))
 	require.NoError(t, err)
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)
