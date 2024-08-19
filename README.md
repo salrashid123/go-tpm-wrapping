@@ -128,7 +128,6 @@ $ go-tpm-wrapping --mode=seal --debug --decrypt=true \
  Error decrypting executing unseal: TPM_RC_POLICY_FAIL (session 1): a policy check failed
 ```
 
-
 If you set auth on the owner key, set the `--hierarchyPass=` parameter:
 
 ```bash
@@ -250,21 +249,25 @@ go-tpm-wrapping --mode=import --decrypt  \
 Error decrypting EncryptSymmetric failed: TPM_RC_POLICY_FAIL (session 1): a policy check failed
 ```
 
+If the local or remote TPM has a passphrase for the Owner or Endorsement key, you can specify  the `--hierarchyPass=` parameter:
+
+
 ```bash
-### set a password on the owner hierarchy for local and password for the endorsement for remote
+## if the local owner key has a passphrase set
 export TPM2TOOLS_TCTI="swtpm:port=2321"
 tpm2_changeauth -c owner newpass1
 
+## if the remote has a passphrase on the endorsement key
 export TPM2TOOLS_TCTI="swtpm:port=2341"
 tpm2_changeauth -c endorsement newpass2
 
-# encrypt
+# encrypt and specify the local 
 go-tpm-wrapping --mode=import --hierarchyPass=newpass1  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
 
-# decrypt
+# decrypt and specify the remote
 go-tpm-wrapping --mode=import --hierarchyPass=newpass2 --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
     --encryptedBlob=/tmp/encrypted.json \
     --tpm-path="127.0.0.1:2341" 
