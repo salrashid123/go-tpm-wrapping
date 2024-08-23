@@ -250,7 +250,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
 
-	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut))
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -823,16 +823,6 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	}
 	rwr := transport.FromReadWriter(rwc)
 
-	// first setup session encryption with the EK
-	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
-
-	defer func() {
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: rsessIn.Handle(),
-		}
-		_, _ = flushContextCmd.Execute(rwr)
-	}()
-
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -870,7 +860,14 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
-	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: rsessInOut.Handle(),
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
 
 	// Default to mechanism used before key info was stored
 	if in.KeyInfo == nil {
@@ -975,7 +972,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 			},
 			InPublic: tpm2.New2B(tpm2.RSAEKTemplate), // tpm2.New2B(ECCSRKHTemplate),
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("can't create primary TPM %v", err)
 		}
@@ -1002,7 +999,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			},
 			PolicySession: import_sess.Handle(),
 			NonceTPM:      import_sess.NonceTPM(),
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("error setting policy PolicyDuplicationSelect %v", err)
 		}
@@ -1020,7 +1017,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			InSymSeed: tpm2.TPM2BEncryptedSecret{
 				Buffer: pbk.DuplicatedOp.DupSeed,
 			},
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("can't run import dup %v", err)
 		}
@@ -1174,7 +1171,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				Auth:   or_sess,
 			}
 
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessIn, true)
+			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessInOut, true)
 			if err != nil {
 				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
 			}
@@ -1196,7 +1193,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 
 			// decrypt the DEK
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessIn, true)
+			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessInOut, true)
 			if err != nil {
 				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
 			}

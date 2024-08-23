@@ -482,11 +482,6 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	defer func() {
-		// flushContextCmd := tpm2.FlushContext{
-		// 	FlushHandle: rsessIn.Handle(),
-		// }
-		// _, _ = flushContextCmd.Execute(rwr)
-
 		flushContextCmd := tpm2.FlushContext{
 			FlushHandle: rsessInOut.Handle(),
 		}
@@ -574,7 +569,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 
 		// create a pcr policy along with PolicyAuth Value (to account for a password)
 		// remember to set the userAuth into the auth option into the policy session (which'll include it in the final auth calculation)
-		sess2, cleanup2, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Auth([]byte(s.userAuth)), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		sess2, cleanup2, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Auth([]byte(s.userAuth)), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up policy session: %v", err)
 		}
@@ -614,7 +609,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 				Name:   k.Name,
 				Auth:   sess2,
 			},
-		}.Execute(rwr)
+		}.Execute(rwr) // since we're using an encrypted session already (sess2),  the transmitted data is also encrypted
 		if err != nil {
 			return nil, fmt.Errorf("executing unseal: %v", err)
 		}
