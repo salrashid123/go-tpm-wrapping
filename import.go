@@ -1,7 +1,6 @@
 package tpmwrap
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -32,17 +31,17 @@ const (
 //
 //	Values here are set using setConfig or options
 type RemoteWrapper struct {
-	tpmPath               string
-	tpmDevice             io.ReadWriteCloser
-	userAgent             string
-	userAuth              string
-	hierarchyAuth         string
-	currentKeyId          *atomic.Value
-	pcrValues             string
-	encryptingPublicKey   string
-	sessionEncryptionName string
-	keyName               string
-	debug                 bool
+	tpmPath              string
+	tpmDevice            io.ReadWriteCloser
+	userAgent            string
+	userAuth             string
+	hierarchyAuth        string
+	currentKeyId         *atomic.Value
+	pcrValues            string
+	encryptingPublicKey  string
+	encryptedSessionName string
+	keyName              string
+	debug                bool
 }
 
 var (
@@ -115,6 +114,13 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		s.keyName = opts.withKeyName
 	}
 
+	switch {
+	case os.Getenv(EnvSessionEncryptionName) != "" && !opts.Options.WithDisallowEnvVars:
+		s.encryptedSessionName = os.Getenv(EnvSessionEncryptionName)
+	case opts.withSessionEncryptionName != "":
+		s.encryptedSessionName = opts.withSessionEncryptionName
+	}
+
 	s.debug = opts.withDebug
 
 	// Map that holds non-sensitive configuration info to return
@@ -126,6 +132,7 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
 	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
 	wrapConfig.Metadata[KEY_NAME] = s.keyName
+	wrapConfig.Metadata[SESSION_ENCRYPTION_NAME] = s.encryptedSessionName
 	return wrapConfig, nil
 }
 
@@ -209,16 +216,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	rwr := transport.FromReadWriter(rwc)
 
-	// first setup session encryption with the EK
-	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
-
-	defer func() {
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: rsessIn.Handle(),
-		}
-		_, _ = flushContextCmd.Execute(rwr)
-	}()
-
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -227,6 +224,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	// TODO: add parameter for setup an AuthHandle with password incase the Endorsement needs a password
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
@@ -241,11 +239,25 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	if s.encryptedSessionName != "" {
+		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
+			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
+		}
+	}
+
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
-	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut))
+
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: rsessInOut.Handle(),
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
 
 	// create a generic local primary key
 	cPrimary, err := tpm2.CreatePrimary{
@@ -255,7 +267,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 		},
 		InPublic: tpm2.New2B(tpm2.RSASRKTemplate), // tpm2.New2B(ECCSRKHTemplate),
-	}.Execute(rwr, rsessIn)
+	}.Execute(rwr, rsessInOut)
 	if err != nil {
 		return nil, fmt.Errorf("can't  CreatePrimary %v", err)
 	}
@@ -345,7 +357,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		// but this one has an auth policy set to PCRs and used for duplication
 
 		// create a pcr trial session to get its digest
-		pcr_sess_trial, pcr_sess_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		pcr_sess_trial, pcr_sess_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up trial session: %v", err)
 		}
@@ -381,7 +393,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		// create a trial session with PolicyDuplicationSelect which stipulates the target systems
 		// where this key can get duplicated
-		dupselect_sess_trial, dupselect_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		dupselect_sess_trial, dupselect_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up trial session: %v", err)
 		}
@@ -410,7 +422,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		//
 
 		// create an OR policy which includes the PolicyPCR and PolicyDuplicationSelect digests
-		or_sess_trial, or_sess_tiral_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		or_sess_trial, or_sess_tiral_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up trial session: %v", err)
 		}
@@ -476,7 +488,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 					}),
 				},
 			},
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("can't create encryption key %v", err)
 		}
@@ -497,13 +509,13 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		newParentLoad, err := tpm2.LoadExternal{
 			Hierarchy: tpm2.TPMRHOwner,
 			InPublic:  tpm2.New2B(ekPububFromPEMTemplate),
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf(" newParentLoadcmd load  %v", err)
 		}
 
 		// setup a real session with just PolicyDuplicationSelect
-		or_sess, aor_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		or_sess, aor_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up trial session: %v", err)
 		}
@@ -549,7 +561,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			Symmetric: tpm2.TPMTSymDef{
 				Algorithm: tpm2.TPMAlgNull,
 			},
-		}.Execute(rwr)
+		}.Execute(rwr) // no need to set rsessInOut since the session is encrypted
 		if err != nil {
 			return nil, fmt.Errorf("duplicateResp can't crate duplicate %v", err)
 		}
@@ -564,7 +576,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		// userAuth
 		// first create a trial session which uses PolicyDuplicationSelect to bind
 		// the duplication to eh ekPub of the remote TPM
-		sess, session1cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		sess, session1cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up trial session: %v", err)
 		}
@@ -633,7 +645,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 					},
 				},
 			},
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("can't create encryption key %v", err)
 		}
@@ -659,7 +671,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			InPublic:  tpm2.New2B(ekPububFromPEMTemplate),
 		}
 
-		rsp, err := newParentLoadcmd.Execute(rwr, rsessIn)
+		rsp, err := newParentLoadcmd.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf(" newParentLoadcmd can't close TPM  %v", err)
 		}
@@ -703,7 +715,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			Symmetric: tpm2.TPMTSymDef{
 				Algorithm: tpm2.TPMAlgNull,
 			},
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("duplicateResp can't crate duplicate %v", err)
 		}
@@ -720,7 +732,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			Name:   createLoadedResp.Name,
 			Auth:   tpm2.PasswordAuth([]byte(s.userAuth)),
 		}
-		kek, err = encryptDecryptSymmetric(rwr, keyAuth2, iv, env.Key, rsessIn, false)
+		kek, err = encryptDecryptSymmetric(rwr, keyAuth2, iv, env.Key, rsessInOut, false)
 		if err != nil {
 			return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
 		}
@@ -766,10 +778,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	if err != nil {
 		return nil, fmt.Errorf("marshaling error: %v", err)
 	}
-	// as convention, we'll save the public key's fingerpint/hash as the keyID
-	// hasher := sha256.New()
-	// hasher.Write([]byte(s.encryptingPublicKey))
-	// keyName := hex.EncodeToString((hasher.Sum(nil)))
 
 	// Store current key id value
 	s.currentKeyId.Store(s.keyName)
@@ -852,6 +860,12 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	if s.encryptedSessionName != "" {
+		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
+			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
+		}
+	}
+
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
@@ -897,8 +911,42 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	}
 
 	if s.encryptingPublicKey != "" {
-		if !bytes.Equal(pbk.DuplicatedOp.EkPub, []byte(s.encryptingPublicKey)) {
-			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected [%s] got [%s]", string(pbk.DuplicatedOp.EkPub), string([]byte(s.encryptingPublicKey)))
+
+		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.EkPub))
+		if err != nil {
+			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+		}
+
+		blockK, _ := pem.Decode(ekPubDup)
+
+		parsedK, err := x509.ParsePKIXPublicKey(blockK.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf(" unable parsing encrypting public key from blob : %v", err)
+		}
+
+		rsaPubK, ok := parsedK.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf(" error converting encryptingPublicKey encrypting public key from blob")
+		}
+
+		ekPubParam, err := hex.DecodeString(string(s.encryptingPublicKey))
+		if err != nil {
+			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+		}
+
+		blockP, _ := pem.Decode(ekPubParam)
+		parsedP, err := x509.ParsePKIXPublicKey(blockP.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf(" unable parsing encrypting public key from parameter : %v", err)
+		}
+
+		rsaPubP, ok := parsedP.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf(" error converting  public key from blob")
+		}
+
+		if !rsaPubK.Equal(rsaPubP) {
+			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s\n", string(ekPubDup), string(ekPubParam))
 		}
 	}
 

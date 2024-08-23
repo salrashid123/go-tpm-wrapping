@@ -152,7 +152,7 @@ If you set auth on the owner key, set the `--hierarchyPass=` parameter:
 
 #### Usage Import
 
-To use this mode, you must first acquire the `Endorsement Public Key (ekPub)`. 
+To use this mode, you must first acquire the `RSA Endorsement Public Key (ekPub)`.   At the moment only RSA keys are supported (a todo is EC)
 
 The ekPub [can be extracted](https://github.com/salrashid123/tpm2/tree/master/ek_import_blob) from the `Endorsement Certificate` on a TPM or on GCE, via an API.
 
@@ -182,7 +182,8 @@ $ go-tpm-wrapping --mode=import --debug  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
-### note, you can even encrypt the data with a --tpm-path="simulator"
+
+# note, you can even encrypt the data with a --tpm-path="simulator"
 ```
 
 - copy scp /tmp/encrypted.json to VM
@@ -234,7 +235,7 @@ $ go-tpm-wrapping --mode=import --debug  \
 
 then,
 
-```
+```bash
 # decrypt
 ## then these PCRs are read in to decrypt on the destination
 $ go-tpm-wrapping --mode=import --debug --decrypt  \
@@ -245,7 +246,7 @@ $ go-tpm-wrapping --mode=import --debug --decrypt  \
 For validation, increment the PCR value on `TPM-B`
 
 ```bash
-export TPM2OPENSSL_TCTI="swtpm:port=2341"
+export TPM2TOOLS_TCTI="swtpm:port=2341"
 $ tpm2_pcrread sha256:0,23
   sha256:
     0 : 0x0000000000000000000000000000000000000000000000000000000000000000
@@ -441,9 +442,23 @@ $ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
 
 Each operation uses encrypted sessions but by default, the library interrogates the TPM for the current EK directly.
 
-A todo is to allow the user to specify the 'name' of a trusted EK which we'd compare in code (if not match, bail, eg implement the ` --tpm-session-encrypt-with-name=` parameter shown below) 
+If for whatever reason you want to specify the "name" of the EK to to use, set the `--tpm-session-encrypt-with-name=` parameter shown below
 
-* [tpmrand Encrypted Session](https://github.com/salrashid123/tpmrand?tab=readme-ov-file#encrypted-session)]
+
+```bash
+# for tpmA
+tpm2_createek -c /tmp/primaryA.ctx -G rsa  -Q
+tpm2_readpublic -c /tmp/primaryA.ctx -o /tmp/ekpubA.pem -n /tmp/ekpubAname.bin -f PEM -Q
+xxd -p -c 100 /tmp/ekpubAname.bin 
+   000b47ab97fdda365cbb86a37548e38468f72e8baccc633cffc42402183679956608
+
+# Then use the hex value returned in the --tpm-session-encrypt-with-name= argument.
+   --tpm-session-encrypt-with-name=000b47ab97fdda365cbb86a37548e38468f72e8baccc633cffc42402183679956608
+```
+
+also see
+
+* [tpmrand Encrypted Session](https://github.com/salrashid123/tpmrand?tab=readme-ov-file#encrypted-session)
 * [aws-tpm-process-credential Encrypted Sessions](https://github.com/salrashid123/aws-tpm-process-credential?tab=readme-ov-file#encrypted-tpm-sessions)
 * [salrashid123/tpm2/Session Encryption](https://github.com/salrashid123/tpm2/tree/master/tpm_encrypted_session)
 
@@ -575,7 +590,6 @@ rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2
 sudo swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert
 sudo swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear
 
-
 ### For TPM-A
 export TPM2TOOLS_TCTI="swtpm:port=2321"
 export TPM2OPENSSL_TCTI="swtpm:port=2321"
@@ -583,7 +597,7 @@ tpm2_pcrread sha256:0,23
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 tpm2_createek -c /tmp/primaryA.ctx -G rsa  -Q
-tpm2_readpublic -c /tmp/primaryA.ctx -o /tmp/ekpubA.pem -f PEM -Q
+tpm2_readpublic -c /tmp/primaryA.ctx -o /tmp/ekpubA.pem -n /tmp/ekpubAname.bin -f PEM -Q
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 ## for import create ek on TPM-B
@@ -592,7 +606,7 @@ export TPM2OPENSSL_TCTI="swtpm:port=2341"
 tpm2_pcrread sha256:0,23
 
 tpm2_createek -c /tmp/primaryB.ctx -G rsa  -Q
-tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -f PEM -Q
+tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -n /tmp/ekpubBname.bin -f PEM -Q
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 ```
 

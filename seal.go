@@ -28,16 +28,17 @@ const (
 //
 //	Values here are set using setConfig or options
 type TPMWrapper struct {
-	tpmPath             string
-	tpmDevice           io.ReadWriteCloser
-	pcrValues           string
-	userAuth            string
-	hierarchyAuth       string
-	userAgent           string
-	currentKeyId        *atomic.Value
-	keyName             string
-	encryptingPublicKey string
-	debug               bool
+	tpmPath              string
+	tpmDevice            io.ReadWriteCloser
+	pcrValues            string
+	userAuth             string
+	hierarchyAuth        string
+	userAgent            string
+	currentKeyId         *atomic.Value
+	keyName              string
+	encryptingPublicKey  string
+	encryptedSessionName string
+	debug                bool
 }
 
 var (
@@ -111,6 +112,13 @@ func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrap
 		s.encryptingPublicKey = opts.withEncryptingPublicKey
 	}
 
+	switch {
+	case os.Getenv(EnvSessionEncryptionName) != "" && !opts.Options.WithDisallowEnvVars:
+		s.encryptedSessionName = os.Getenv(EnvSessionEncryptionName)
+	case opts.withSessionEncryptionName != "":
+		s.encryptedSessionName = opts.withSessionEncryptionName
+	}
+
 	if opts.withTPM != nil {
 		if s.tpmPath != "" {
 			return nil, fmt.Errorf("cannot specify both TPMPath and TPMDevice")
@@ -128,6 +136,7 @@ func (s *TPMWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*wrap
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
 	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
 	wrapConfig.Metadata[KEY_NAME] = s.keyName
+	wrapConfig.Metadata[SESSION_ENCRYPTION_NAME] = s.encryptedSessionName
 	return wrapConfig, nil
 }
 
@@ -167,16 +176,6 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		return nil, fmt.Errorf("error wrapping data: %w", err)
 	}
 
-	// first setup session encryption with the EK,
-	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
-
-	defer func() {
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: rsessIn.Handle(),
-		}
-		_, _ = flushContextCmd.Execute(rwr)
-	}()
-
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -185,6 +184,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	// TODO: add parameter for setup an AuthHandle with password incase the Endorsement needs a password
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
@@ -199,11 +199,25 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	if s.encryptedSessionName != "" {
+		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
+			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
+		}
+	}
+
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
-	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+
+	defer func() {
+		flushContextInOut := tpm2.FlushContext{
+			FlushHandle: rsessInOut.Handle(),
+		}
+		_, _ = flushContextInOut.Execute(rwr)
+	}()
 
 	// get the specified pcrs
 	pcrMap, pcrList, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
@@ -220,7 +234,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 		},
 		InPublic: tpm2.New2B(keyfile.ECCSRK_H2_Template),
-	}.Execute(rwr, rsessIn)
+	}.Execute(rwr, rsessInOut)
 	if err != nil {
 		return nil, fmt.Errorf("can't create primary %v", err)
 	}
@@ -231,7 +245,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, err = flush.Execute(rwr)
 	}()
 
-	sess, cleanup1, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+	sess, cleanup1, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 	if err != nil {
 		return nil, fmt.Errorf("setting up trial session: %v", err)
 	}
@@ -303,7 +317,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 				},
 			},
 		},
-	}.Execute(rwr, rsessIn)
+	}.Execute(rwr, rsessInOut)
 	if err != nil {
 		return nil, fmt.Errorf("can't create object TPM  %v", err)
 	}
@@ -316,7 +330,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		},
 		InPrivate: cCreate.OutPrivate,
 		InPublic:  cCreate.OutPublic,
-	}.Execute(rwr, rsessIn)
+	}.Execute(rwr, rsessInOut)
 	if err != nil {
 		return nil, fmt.Errorf("can't load object  %v", err)
 	}
@@ -431,8 +445,6 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 	}
 
 	// first setup session encryption with the EK
-	rsessIn := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn))
-
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -441,6 +453,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	// TODO: add parameter for setup an AuthHandle with password incase the Endorsement needs a password
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
@@ -455,16 +468,27 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	if s.encryptedSessionName != "" {
+		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
+			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
+		}
+	}
+
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
 
-	rsessIn = tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	defer func() {
+		// flushContextCmd := tpm2.FlushContext{
+		// 	FlushHandle: rsessIn.Handle(),
+		// }
+		// _, _ = flushContextCmd.Execute(rwr)
+
 		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: rsessIn.Handle(),
+			FlushHandle: rsessInOut.Handle(),
 		}
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
@@ -477,7 +501,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 		},
 		InPublic: tpm2.New2B(keyfile.ECCSRK_H2_Template),
-	}.Execute(rwr, rsessIn)
+	}.Execute(rwr, rsessInOut)
 	if err != nil {
 		return nil, fmt.Errorf("can't create primary %v", err)
 	}
@@ -537,7 +561,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			},
 			InPublic:  regenKey.Pubkey,
 			InPrivate: regenKey.Privkey,
-		}.Execute(rwr, rsessIn)
+		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("executing Load: %v", err)
 		}
@@ -550,7 +574,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 
 		// create a pcr policy along with PolicyAuth Value (to account for a password)
 		// remember to set the userAuth into the auth option into the policy session (which'll include it in the final auth calculation)
-		sess2, cleanup2, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Auth([]byte(s.userAuth)), tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
+		sess2, cleanup2, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Auth([]byte(s.userAuth)), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.AESEncryption(128, tpm2.EncryptOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 		if err != nil {
 			return nil, fmt.Errorf("setting up policy session: %v", err)
 		}

@@ -57,6 +57,8 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 				opts.withKeyName = v
 			case ENCRYPTING_PUBLIC_KEY:
 				opts.withEncryptingPublicKey = v
+			case SESSION_ENCRYPTION_NAME:
+				opts.withSessionEncryptionName = v
 			}
 		}
 	}

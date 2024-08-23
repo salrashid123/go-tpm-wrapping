@@ -26,17 +26,18 @@ const (
 	EnvEncryptingPublicKey = "TPM_ENCRYPTING_PUBLIC_KEY"
 	EnvUserAuth            = "TPM_USER_AUTH"
 	EnvHierarchyAuth       = "TPM_HIERARCHY_AUTH"
-	EnvKeyName             = "TPM_KEY_NAME"
-	EnvDEBUG               = "TPM_DEBUG"
-	// EnvSessionEncryptionName = "TPM_SESSION_ENCRYPTION_NAME"
 
-	TPM_PATH              = "tpm_path"
-	PCR_VALUES            = "pcr_values"
-	USER_AUTH             = "user_auth"
-	HIERARCHY_AUTH        = "hierarchy_auth"
-	KEY_NAME              = "key_name"
-	ENCRYPTING_PUBLIC_KEY = "encrypting_public_key"
-	// SESSION_ENCRYPTION_NAME = "session_encryption_name"
+	EnvKeyName               = "TPM_KEY_NAME"
+	EnvDEBUG                 = "TPM_DEBUG"
+	EnvSessionEncryptionName = "TPM_SESSION_ENCRYPTION_NAME"
+
+	TPM_PATH                = "tpm_path"
+	PCR_VALUES              = "pcr_values"
+	USER_AUTH               = "user_auth"
+	HIERARCHY_AUTH          = "hierarchy_auth"
+	KEY_NAME                = "key_name"
+	ENCRYPTING_PUBLIC_KEY   = "encrypting_public_key"
+	SESSION_ENCRYPTION_NAME = "session_encryption_name"
 
 	DEBUG = "debug"
 )
