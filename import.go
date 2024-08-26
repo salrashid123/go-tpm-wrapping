@@ -754,6 +754,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	wrappb := &tpmwrappb.Secret{
 		Name:     s.keyName,
+		Version:  KEY_VERSION,
 		Type:     tpmwrappb.Secret_DUPLICATE,
 		Pcrs:     pr,
 		UserAuth: hasUserAuth,

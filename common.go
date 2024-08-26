@@ -39,6 +39,8 @@ const (
 	ENCRYPTING_PUBLIC_KEY   = "encrypting_public_key"
 	SESSION_ENCRYPTION_NAME = "session_encryption_name"
 
+	KEY_VERSION = 1
+
 	DEBUG = "debug"
 )
 

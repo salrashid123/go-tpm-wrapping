@@ -371,6 +371,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	}
 	wrappb := &tpmwrappb.Secret{
 		Name:     s.keyName,
+		Version:  KEY_VERSION,
 		Type:     tpmwrappb.Secret_SEALED,
 		Pcrs:     pr,
 		UserAuth: hasUserAuth,

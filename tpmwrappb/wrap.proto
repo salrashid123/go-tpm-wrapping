@@ -7,16 +7,17 @@ option go_package = "github.com/salrashid123/go-tpm-wrapping/tpmwrappb";
 
 message Secret {
   string name = 1;
-  KeyType type = 2;
+  int32 version = 2;
+  KeyType type = 3;
   enum KeyType {
     SEALED = 0;
     DUPLICATE = 1;
   }
-  bool userAuth = 3;  
-  repeated PCRS pcrs = 4;  
+  bool userAuth = 4;  
+  repeated PCRS pcrs = 5;  
   oneof Key{
-      SealedKey sealed_op=5;
-      DuplicatedKey duplicated_op=6;
+      SealedKey sealed_op=6;
+      DuplicatedKey duplicated_op=7;
   }
 }
 
