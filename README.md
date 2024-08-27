@@ -524,7 +524,7 @@ Copy the `encryptedblob.json` to `TPM-B`.  Specify the persistent handle while i
 
 The following details some background how each of these modes works:
 
-- `Seal`
+#### `Seal`
 
   Sealing data to a TPM is pretty well known (see [tpm2_unseal](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_unseal.1.md)).  Basically you create a key where the sensitive data within that key is the actual secret.   The Key itself can have a password or pcr policy set which must get fulfilled to unseal.  In this library, the wrapping DEK is what is sealed.
 
@@ -559,7 +559,7 @@ key1 = TPMKey.Unseal()
 plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
 ```
 
-- `Import`
+#### `Import`
 
    For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.
    
