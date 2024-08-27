@@ -2,7 +2,6 @@ package tpmwrap
 
 import (
 	"bytes"
-	"crypto/aes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrappb "github.com/salrashid123/go-tpm-wrapping/tpmwrappb"
-	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -171,11 +169,14 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	}
 	rwr := transport.FromReadWriter(rwc)
 
+	// first encrypt the plaintext using the underlying wrapping library construct
+	//  this will by default generate a random encryption key, iv and use that to generate a ciphertext
 	env, err := wrapping.EnvelopeEncrypt(plaintext, opt...)
 	if err != nil {
 		return nil, fmt.Errorf("error wrapping data: %w", err)
 	}
 
+	// start an initial encryption session
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -184,7 +185,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
-	// TODO: add parameter for setup an AuthHandle with password incase the Endorsement needs a password
+	// get the endorsement key using that initial session
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
@@ -199,17 +200,20 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	// if the user provided as encryption session "name" in hex, compare that to the one we just got
 	if s.encryptedSessionName != "" {
 		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
 			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
 		}
 	}
 
+	// now get the encryption session's name
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
 
+	// create a full encryption session for rest of the operations
 	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	defer func() {
@@ -245,6 +249,8 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		_, err = flush.Execute(rwr)
 	}()
 
+	// now create a session to setup the keys.  For each, operation, pass the encryption session public as the salt
+	// this session will setup the pcr digest and password (policy)
 	sess, cleanup1, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
 	if err != nil {
 		return nil, fmt.Errorf("setting up trial session: %v", err)
@@ -292,6 +298,8 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		return nil, fmt.Errorf("error executing PolicyGetDigest: %v", err)
 	}
 
+	// now that we have the digest, create the actual TPM based key based on the parent
+	// remember the sensitive data **is** the encryption we we used in wrapping.EnvelopeEncrypt(plaintext, opt...)
 	cCreate, err := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: cPrimary.ObjectHandle,
@@ -310,7 +318,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		InSensitive: tpm2.TPM2BSensitiveCreate{
 			Sensitive: &tpm2.TPMSSensitiveCreate{
 				Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
-					Buffer: []byte(env.Key), //  set the inner encryption key as the sensitive data
+					Buffer: []byte(env.Key), //  <<<<<<<<<<<<<<<<< set the inner encryption key as the sensitive data
 				}),
 				UserAuth: tpm2.TPM2BAuth{
 					Buffer: []byte(s.userAuth), // set the key auth password
@@ -351,12 +359,17 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		keyfile.WithDescription(s.keyName),
 	)
 
+	// get the keyfiles PEM bytes
 	kfb := new(bytes.Buffer)
 	err = keyfile.Encode(kfb, tkf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Key: %v", err)
 	}
 
+	// get the list of PCRs and their values we used
+	// this isn't necessary but i'm encoding it into the proto incase
+	// we want a reference of "what were the pcr values we even used to encrypt this"
+	// is ever needed.   I'm on the fence if this is even needed (probably not)
 	var pr []*tpmwrappb.PCRS
 	for i, k := range pcrMap {
 		pr = append(pr, &tpmwrappb.PCRS{
@@ -364,8 +377,9 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 			Value: k,
 		})
 	}
-	hasUserAuth := false
 
+	// create the proto format of wrapped key and values
+	hasUserAuth := false
 	if s.userAuth != "" {
 		hasUserAuth = true
 	}
@@ -382,6 +396,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		},
 	}
 
+	// get the bytes of the proto
 	b, err := protojson.Marshal(wrappb)
 	if err != nil {
 		return nil, fmt.Errorf("failed to wrap proto Key: %v", err)
@@ -390,28 +405,14 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 	// Store current key id value
 	s.currentKeyId.Store(s.keyName)
 
-	// get the initialization vector
-	if len(env.Iv) == 0 {
-		r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
-			TpmDevice: rwc,
-			//Scheme:    backoff.NewConstantBackOff(time.Millisecond * 10),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to tpmrandreader: %v", err)
-		}
-		env.Iv = make([]byte, aes.BlockSize)
-		// or to use the random source from the tpm itself: https://github.com/salrashid123/tpmrand
-		if _, err := io.ReadFull(r, env.Iv); err != nil {
-			return nil, errors.New("error creating initialization vector")
-		}
-	}
-
+	// return the ciphertext, IV used and the bytes of the proto as the actaul
+	// sealed key.  The sealed key includes the TPM KEY that has the sealed key that was used
 	ret := &wrapping.BlobInfo{
 		Ciphertext: env.Ciphertext,
 		Iv:         env.Iv,
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMSeal,
-			KeyId:      s.keyName, //  hex.EncodeToString(aKey.Name.Buffer),
+			KeyId:      s.keyName,
 			WrappedKey: b,
 		},
 	}
@@ -445,7 +446,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		}
 	}
 
-	// first setup session encryption with the EK
+	// first setup basis session encryption with the EK
 	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -454,7 +455,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
-	// TODO: add parameter for setup an AuthHandle with password incase the Endorsement needs a password
+	// get the local endorsement key using the basic session
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
@@ -469,17 +470,20 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		_, _ = flushContextCmd.Execute(rwr)
 	}()
 
+	// compare if the user sent in a session "name" to what we just got
 	if s.encryptedSessionName != "" {
 		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
 			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
 		}
 	}
 
+	// get the EKPub
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
 		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
 	}
 
+	// use the ekpub to create a full session encryption handle
 	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 
 	defer func() {
@@ -512,6 +516,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 	switch in.KeyInfo.Mechanism {
 	case TPMSeal:
 
+		// decode the inner proto from
 		wrappb := &tpmwrappb.Secret{}
 		err := protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
 		if err != nil {
@@ -522,6 +527,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			fmt.Printf("Decrypting with name %s\n", wrappb.Name)
 		}
 
+		// get a list of the pcr's used in the sealing
 		var pcrList []uint
 		for _, v := range wrappb.Pcrs {
 			pcrList = append(pcrList, uint(v.Pcr))
@@ -538,6 +544,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			return nil, fmt.Errorf("incorrect keytype, expected Secret_SEALED")
 		}
 
+		// now decode the keyfile
 		pbk, ok := wrappb.GetKey().(*tpmwrappb.Secret_SealedOp)
 		if !ok {
 			return nil, fmt.Errorf("error unmarshalling tpmwrappb.Secret_SealedOp")
@@ -621,6 +628,8 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			Iv:         in.Iv,
 			Ciphertext: in.Ciphertext,
 		}
+
+		// we're finally ready to decrypt the ciphertext
 		plaintext, err = wrapping.EnvelopeDecrypt(envInfo, opt...)
 		if err != nil {
 			return nil, fmt.Errorf("error decrypting data with envelope: %w", err)
