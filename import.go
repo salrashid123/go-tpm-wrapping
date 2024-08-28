@@ -219,20 +219,11 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	rwr := transport.FromReadWriter(rwc)
 
-	// create a basic encryption session
-	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
-	defer func() {
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: encsess.Handle(),
-		}
-		_, _ = flushContextCmd.Execute(rwr)
-	}()
-
-	// get the endorsement key using that initial session
+	// get the endorsement key for the local TPM which we will use for parameter encryption
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}.Execute(rwr, encsess)
+	}.Execute(rwr)
 	if err != nil {
 		return nil, fmt.Errorf("error creating EK Primary  %v", err)
 	}
@@ -844,7 +835,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	}
 
 	// create an actual full encryption session using the EK we trust
-	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptIn), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
+	rsessInOut := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub))
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
 			FlushHandle: rsessInOut.Handle(),

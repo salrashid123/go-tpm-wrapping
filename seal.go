@@ -176,20 +176,11 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		return nil, fmt.Errorf("error wrapping data: %w", err)
 	}
 
-	// start an initial encryption session
-	encsess := tpm2.HMAC(tpm2.TPMAlgSHA256, 16, tpm2.AESEncryption(128, tpm2.EncryptOut))
-	defer func() {
-		flushContextCmd := tpm2.FlushContext{
-			FlushHandle: encsess.Handle(),
-		}
-		_, _ = flushContextCmd.Execute(rwr)
-	}()
-
-	// get the endorsement key using that initial session
+	// get the endorsement key for the local TPM which we will use for parameter encryption
 	createEKRsp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
-	}.Execute(rwr, encsess)
+	}.Execute(rwr)
 	if err != nil {
 		return nil, fmt.Errorf("error creating EK Primary  %v", err)
 	}

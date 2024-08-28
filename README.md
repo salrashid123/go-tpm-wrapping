@@ -20,14 +20,14 @@ There are two modes to using this library:
 
 * `Remote encryption`
 
-  This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the encryption key which can ONLY get decrypted by the TPM that owns the EKPub
+  This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the some data which can ONLY get decrypted by the TPM that owns the EKPub
 
   This mode requires local access to a real or simulated TPM to encrypt the data.
 
 
-For a detailed description on how these modes work, see the `Background` section at the end
+For a detailed description on how these modes work, see the [Background](#background) section at the end
 
-This library is a a variation of [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping)
+This library builds off of Hashicorp Vault wrapping [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping).
 
 You can use this as a library or CLI
 
@@ -40,6 +40,14 @@ Examples below uses two [software TPMs](https://manpages.debian.org/testing/swtp
 To configure the software TPM on your laptop for testing, see the `Using swtpm` section below.
 
 ---
+
+### CLI
+
+You can build or download the cli from the `Releases` section
+
+```bash
+go build  -o go-tpm-wrapping cmd/main.go
+```
 
 CLI Options:
 
@@ -60,21 +68,14 @@ CLI Options:
 
 ---
 
-### CLI
-
-You can build or download the cli from the `Releases` section
-
-```bash
-go build  -o go-tpm-wrapping cmd/main.go
-```
-
 #### Usage Seal
 
 To use, simply initialize the wrapper as shown below, specify a path to the TPM and optionally the PCR values to bind against
 
-To use as a CLI, you can run `cmd/main.go` or download from the `Releases` page.  If you want to use as an API, see the `example` folder
+To use as a CLI, you can run `cmd/main.go` or download from the [Releases](/releases) page.  If you want to use as an API, see the [example/](/tree/main/example) folder
 
-- encrypt/decrypt
+- **encrypt/decrypt**
+
 ```bash
 $ go-tpm-wrapping --mode=seal --debug \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
@@ -84,7 +85,7 @@ $ go-tpm-wrapping --mode=seal --debug --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
 ```
 
-- encrypt/decrypt with passphrase
+- **encrypt/decrypt with passphrase**
 
 ```bash
 $ go-tpm-wrapping --mode=seal --debug \
@@ -95,7 +96,7 @@ $ go-tpm-wrapping --mode=seal --debug --keyPass=testpass --decrypt=true \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2321"
 ```
 
-- encrypt/decrypt with passphrase and PCR values.  
+- **encrypt/decrypt with passphrase and PCR values**
 
 ```bash
 ### for example, if you want to stipulate the following PCR values must be present to unseal
@@ -176,7 +177,7 @@ Just to note, you don't *really* need access to a real, permanent TPM on the sys
 
 The following encrypts some data using just the remote `ekpub`
 
-- encrypt/decrypt
+- **encrypt/decrypt**
 
 ```bash
 # encrypt
@@ -197,7 +198,7 @@ $ go-tpm-wrapping --mode=import --debug --decrypt --encrypting_public_key=/tmp/e
     --tpm-path="127.0.0.1:2341" 
 ```
 
-- With userAuth
+- **With userAuth**
 
 ```bash
 # encrypt
@@ -216,7 +217,7 @@ $ go-tpm-wrapping --mode=import --debug --decrypt \
     --tpm-path="127.0.0.1:2341" 
 ```
 
-- With PCR
+- **With PCR**
 
 ```bash
 ## encrypt/decrypt and bind the data to the **destination TPM's** values in
@@ -440,10 +441,9 @@ $ go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"   
 ```
 
-
 ### Session Encryption
 
-Each operation uses encrypted sessions but by default, the library interrogates the TPM for the current EK directly.
+Each operation uses [encrypted sessions](https://trustedcomputinggroup.org/wp-content/uploads/TCG_CPU_TPM_Bus_Protection_Guidance_Passive_Attack_Mitigation_8May23-3.pdf) by default and interrogates the TPM for the current EK directly.
 
 If for whatever reason you want to specify the "name" of the EK to to use, set the `--tpm-session-encrypt-with-name=` parameter shown below
 
@@ -459,6 +459,135 @@ xxd -p -c 100 /tmp/ekpubAname.bin
    --tpm-session-encrypt-with-name=000b47ab97fdda365cbb86a37548e38468f72e8baccc633cffc42402183679956608
 ```
 
+### Background
+
+The following details some background how each of these modes works:
+
+#### `Seal`
+
+  Sealing data to a TPM is pretty well known (see [tpm2_unseal](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_unseal.1.md)).  Basically you create a key where the sensitive data within that key is the actual secret.   The Key itself can have a password or pcr policy set which must get fulfilled to unseal.  In this library, the wrapping DEK is what is sealed.
+
+to `Encrypt`:
+
+   1. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
+      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
+   2. generate a primary key on the TPM
+   3. create a session or pcr policy to apply to the TPM 
+   4. generate child key on the TPM with any policy and set its "sensitive" data to _inner encryption key_
+   5. convert the child TPM key to a PEM encoded format
+   6. create a protobuf that contains the encoded keyfile
+   7. return the ciphertext, initialization vector and encoded tpm key
+
+   ```
+   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
+   tpm_key = tpm2_seal(key1)
+   ```
+
+to `Decrypt`:
+
+   1. read the ciphertext, IV and encoded tpm key
+   2. generate a primary key on the TPM
+   3. create a session or pcr policy to apply to the TPM 
+   4. load the encoded tpm key
+   5. unseal the tpm key to acquire the _inner encryption key_
+   6. use the inner key, IV and ciphertext to run [go-kms-wrapping.Decrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Decrypt)
+   7. return the plaintext
+
+   ```
+   key1 = tpm2_unseal()
+   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
+   ```
+
+#### `Import`
+
+   For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.
+   
+   In this specific implementation, there ar e several layers of encryption involved:
+
+
+**A**: To transfer a secret from `TPM-A` to `TPM-B` with **userAuth**
+
+   1. `TPM-B`: create `ekpubB.pem`
+   2.  copy `ekpubB.pem` to `TPM-A`
+
+on `TPM-A`:
+
+   3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
+      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
+   4. create a trial session with `PolicyDuplicateSelect` using `TPM-B`'s ekpub
+   5. create an AES key on `TPM-A` with authPolicy (userAuth) and the trial session.
+   6. use the TPM based AES key to encrypt the  _inner encryption key_ and a random iv value (per_use_iv)
+   7. duplicate the TPM based key using the `Policyduplicateselect` and a real session
+
+   ``` 
+   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
+   per_use_iv = new random iv     
+   tpm_key = new tpm2_create(auth=with_auth_policy)
+   ciphertext2 = tpm2_encrypt(key1, per_use_iv)
+   duplicate = tpm2_duplicate(tpm_key, ekPubB.pem)
+   ```
+
+copy the duplicated key and wrapped  _inner encryption key_,per_use_iv, iv1, ciphertext to `TPM-B`  (all of which is encoded into one file)
+
+on `TPM-B`:
+
+   8. create a real session with `PolicySecret` (since we used the EndorsementKey)
+   9. Import and Load the duplicated key with the policy
+   10. Use the TPM-based key, specify the userAuth and decrypt the original  _inner encryption key_
+   11. use the inner key, IV and ciphertext to run [go-kms-wrapping.Decrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Decrypt)
+
+   ```
+   tpm_key = tpm2_import(duplicate)
+   key1 = tpm2_decrypt(ciphertext2, per_use_iv)
+   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
+   ```
+
+**B**: To transfer a secret from `TPM-A` to `TPM-B` with **PCRPolicy**
+
+1. TPM-B: create `ekpubB.pem`
+2. copy `ekpubB.pem` to `TPM-A`
+
+on `TPM-A`:
+
+   3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt).
+
+      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
+
+   4. create *NEW* random local (non-tpm) AES key
+   5. use the AES key to encrypt the _inner encryption key_
+   6. create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-B`'s ekpub)
+   7. create a NEW AES key on `TPM-A` with the original random AES key as the sensitive bit and the AuthPolicy using the `PolicyOR` above.
+      Note that this is the same key as step 4 since we used the same sensitive
+   8. create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-B`
+   9. duplicate the key
+
+   ```
+   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
+   per_use_iv = new random iv
+   per_useaes_key = new go.crypto.AESCFBKey()   // this is a nonTPM key that is per-use
+   wrapped_key1 = per_useaes_key.Encrypt(key1, per_use_iv)  // we're doing this because we maynot able to fulfill the pcr policy on TPM-A
+
+   tpm_key = new tpm2_create(auth=with_auth_policy, **sensitvie=per_useaes_key** )  // this is critical, we set the sentsitive to the per-use key; 
+   duplicate = tpm2_duplicate(tpm_key, ekPubB.pem)
+   ```
+
+copy the duplicated tpm_key, wrapped_key1, iv1, per_use_iv to `TPM-B`
+
+on `TPM-B`
+
+   10. Create a `PolicyOR` with `PolicyPCR` and `PolicyDuplicateSelect` that match what is expected
+   11. Import the duplicated key
+   12. Decrypt the KEK using the TPM-based duplicated key (eg the AES key)
+   13. Use the KEK to decrypt the DEK
+
+   ```
+   tpm_key = tpm2_import(duplicate)
+   key1 = tpm2_decrypt(wrapped_key1, per_use_iv)  // we can do this because its the same key and iv which we encrypted with
+   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
+   ```
+
+---
+
 also see
 
 * [tpmrand Encrypted Session](https://github.com/salrashid123/tpmrand?tab=readme-ov-file#encrypted-session)
@@ -466,7 +595,7 @@ also see
 * [salrashid123/tpm2/Session Encryption](https://github.com/salrashid123/tpm2/tree/master/tpm_encrypted_session)
 
 
-### Build
+#### Build
 
 If you want to regenerate with protoc:
 
@@ -482,7 +611,7 @@ $ /usr/local/bin/protoc -I ./ --include_imports \
    --go_out=paths=source_relative:. tpmwrappb/wrap.proto
 ```
 
-### Seal/Import with non-EKPub
+#### Seal/Import with non-EKPub
 
 _TODO_
 
@@ -522,134 +651,7 @@ Copy the `encryptedblob.json` to `TPM-B`.  Specify the persistent handle while i
 
 ---
 
-### Background
-
-The following details some background how each of these modes works:
-
-#### `Seal`
-
-  Sealing data to a TPM is pretty well known (see [tpm2_unseal](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_unseal.1.md)).  Basically you create a key where the sensitive data within that key is the actual secret.   The Key itself can have a password or pcr policy set which must get fulfilled to unseal.  In this library, the wrapping DEK is what is sealed.
-
-to `Encrypt`:
-
-   1. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
-      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
-   2. generate a primary key on the TPM
-   3. create a session or pcr policy to apply to the TPM 
-   4. generate child key on the TPM with any policy and set its "sensitive" data to _inner encryption key_
-   5. convert the child TPM key to a PEM encoded format
-   6. create a protobuf that contains the encoded keyfile
-   7. return the ciphertext, initialization vector and encoded tpm key
-
-   ```
-   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
-   tpm_key = TPMKey.Seal(key1)
-   ```
-
-to `Decrypt`:
-
-   1. read the ciphertext, IV and encoded tpm key
-   2. generate a primary key on the TPM
-   3. create a session or pcr policy to apply to the TPM 
-   4. load the encoded tpm key
-   5. unseal the tpm key to acquire the _inner encryption key_
-   6. use the inner key, IV and ciphertext to run [go-kms-wrapping.Decrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Decrypt)
-   7. return the plaintext
-
-   ```
-   key1 = TPMKey.Unseal()
-   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
-   ```
-
-#### `Import`
-
-   For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.
-   
-   In this specific implementation, there ar e several layers of encryption involved:
-
-
-**A**: To transfer a secret from `TPM-A` to `TPM-B` with **userAuth**
-
-   1. `TPM-B`: create `ekpubB.pem`
-   2.  copy `ekpubB.pem` to `TPM-A`
-
-on `TPM-A`:
-
-   3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
-      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
-   4. create a trial session with `PolicyDuplicateSelect` using `TPM-B`'s ekpub
-   5. create an AES key on `TPM-A` with authPolicy (userAuth) and the trial session.
-   6. use the TPM based AES key to encrypt the  _inner encryption key_ and a random iv value (per_use_iv)
-   7. duplicate the TPM based key using the `Policyduplicateselect` and a real session
-
-   ``` 
-   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
-   per_use_iv = new random iv     
-   tpm_key = new TPMKey(with_auth_policy)
-   ciphertext2 = tpm_key.Encrypt(key1, per_use_iv)
-   duplicate = TPMDuplicate(tpm_key, ekPubB.pem)
-   ```
-
-copy the duplicated key and wrapped  _inner encryption key_,per_use_iv, iv1, ciphertext to `TPM-B`  (all of which is encoded into one file)
-
-on `TPM-B`:
-
-   8. create a real session with `PolicySecret` (since we used the EndorsementKey)
-   9. Import and Load the duplicated key with the policy
-   10. Use the TPM-based key, specify the userAuth and decrypt the original  _inner encryption key_
-   11. use the inner key, IV and ciphertext to run [go-kms-wrapping.Decrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Decrypt)
-
-   ```
-   tpm_key = TPMImport(duplicate)
-   key1 = tpm_key.Decrypt(ciphertext2, per_use_iv)
-   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
-   ```
-
-**B**: To transfer a secret from `TPM-A` to `TPM-B` with **PCRPolicy**
-
-1. TPM-B: create `ekpubB.pem`
-2. copy `ekpubB.pem` to `TPM-A`
-
-on `TPM-A`:
-
-   3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
-      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
-   4. create *NEW* random local (non-tpm) AES key
-   5. use the AES key to encrypt the _inner encryption key_
-   6. create a trial TPM `PolicyOR` session with a `PolicyPCR` and `PolicyDuplicateSelect` (the latter which bound to `TPM-B`'s ekpub)
-   7. create a NEW AES key on `TPM-A` with the original random AES key as the sensitive bit and the AuthPolicy using the `PolicyOR` above.
-      Note that this is the same key as step 4 since we used the same sensitive
-   8. create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-B`
-   9. duplicate the key
-
-   ```
-   key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
-   per_use_iv = new random iv
-   per_useaes_key = new AESCFBKey()   // this is a nonTPM key that is per-use
-   wrapped_key1 = per_useaes_key.Encrypt(key1, per_use_iv)  // we're doing this because we maynot able to fulfill the pcr policy on TPM-A
-
-   tpm_key = new TPMKey(with_auth_policy, per_useaes_key as senstitive )  // this is critical, we set the sentsitive to the per-use key; 
-   duplicate = TPMDuplicate(tpm_key, ekPubB.pem)
-   ```
-
-copy the duplicated tpm_key, wrapped_key1, iv1, per_use_iv to `TPM-B`
-
-on `TPM-B`
-
-   10. Create a `PolicyOR` with `PolicyPCR` and `PolicyDuplicateSelect` that match what is expected
-   11. Import the duplicated key
-   12. Decrypt the KEK using the TPM-based duplicated key (eg the AES key)
-   13. Use the KEK to decrypt the DEK
-
-   ```
-   tpm_key = TPMImport(duplicate)
-   key1 = tpm_key.Decrypt(wrapped_key1, per_use_iv)  // we can do this because its the same key and iv which we encrypted with
-   plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
-   ```
-
----
-
-### Using swtpm
+#### Using swtpm
 
 If you want to test locally with software TPMs:
 
