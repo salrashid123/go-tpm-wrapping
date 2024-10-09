@@ -494,7 +494,7 @@ to `Decrypt`:
    7. return the plaintext
 
    ```
-   key1 = tpm2_unseal()
+   key1 = tpm_key.unseal()
    plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
    ```
 
@@ -519,15 +519,15 @@ on `TPM-A`:
    6. use the TPM based AES key to encrypt the  _inner encryption key_ and a random iv value (per_use_iv)
    7. duplicate the TPM based key using the `Policyduplicateselect` and a real session
 
-   ``` 
+   ```bash
    key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
    per_use_iv = new random iv     
    tpm_key = new tpm2_create(auth=with_auth_policy)
-   ciphertext2 = tpm2_encrypt(key1, per_use_iv)
+   ciphertext2 = tpm_key.encrypt(key1, per_use_iv)
    duplicate = tpm2_duplicate(tpm_key, ekPubB.pem)
    ```
 
-copy the duplicated key and wrapped  _inner encryption key_,per_use_iv, iv1, ciphertext to `TPM-B`  (all of which is encoded into one file)
+copy the duplicated key and wrapped ciphertext1, ciphertext2, per_use_iv, iv1 to `TPM-B`  (all of which is encoded into one file)
 
 on `TPM-B`:
 
@@ -536,7 +536,7 @@ on `TPM-B`:
    10. Use the TPM-based key, specify the userAuth and decrypt the original  _inner encryption key_
    11. use the inner key, IV and ciphertext to run [go-kms-wrapping.Decrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Decrypt)
 
-   ```
+   ```bash
    tpm_key = tpm2_import(duplicate)
    key1 = tpm2_decrypt(ciphertext2, per_use_iv)
    plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
@@ -561,17 +561,17 @@ on `TPM-A`:
    8. create a real session with `PolicyDuplicateSelect` bound to the remote `TPM-B`
    9. duplicate the key
 
-   ```
+   ```bash
    key1, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
    per_use_iv = new random iv
-   per_useaes_key = new go.crypto.AESCFBKey()   // this is a nonTPM key that is per-use
-   wrapped_key1 = per_useaes_key.Encrypt(key1, per_use_iv)  // we're doing this because we maynot able to fulfill the pcr policy on TPM-A
+   per_use_aes_key = new go.crypto.AESCFBKey()   ##  this is a nonTPM key that is per-use
+   wrapped_key1 = per_use_aes_key.Encrypt(key1, per_use_iv)  ## we're doing this because we maynot able to fulfill the pcr policy on TPM-A
 
-   tpm_key = new tpm2_create(auth=with_auth_policy, **sensitvie=per_useaes_key** )  // this is critical, we set the sentsitive to the per-use key; 
+   tpm_key = new tpm2_create(auth=with_auth_policy, **sensitive=per_use_aes_key** )  ## this is critical, we set the sensitive to the per-use key; 
    duplicate = tpm2_duplicate(tpm_key, ekPubB.pem)
    ```
 
-copy the duplicated tpm_key, wrapped_key1, iv1, per_use_iv to `TPM-B`
+copy the duplicated key, wrapped_key1, ciphertext1, iv1, per_use_iv to `TPM-B`
 
 on `TPM-B`
 
@@ -580,9 +580,9 @@ on `TPM-B`
    12. Decrypt the KEK using the TPM-based duplicated key (eg the AES key)
    13. Use the KEK to decrypt the DEK
 
-   ```
+   ```bash
    tpm_key = tpm2_import(duplicate)
-   key1 = tpm2_decrypt(wrapped_key1, per_use_iv)  // we can do this because its the same key and iv which we encrypted with
+   key1 = tpm_key.decrypt(wrapped_key1, per_use_iv)  ## we can do this because its the same key and iv which we encrypted with
    plaintext1 = go-kms-wrapping.Decrypt(key1, iv1, ciphertext1) 
    ```
 
