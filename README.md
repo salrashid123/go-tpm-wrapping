@@ -7,6 +7,7 @@ In other words, you *must* have access to a specific TPM decrypt the wrapping ke
 In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase (`userAuth`) or if the target system has certain `PCR` values.
 
 >> **Update 11/18/24**: `v0.7.0`:changed import protobuf to use seal/unseal
+
 >> **Update 8/16/24**:  changed the key format to use protobuf
 
 There are two modes to using this library:
@@ -473,7 +474,7 @@ The following details some background how each of these modes works:
 to `Encrypt`:
 
    1. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
-      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_, initialization vector and cipher text
+      This will return a new _inner encryption key_, initialization vector and cipher text
    2. generate a primary key on the TPM
    3. create a session or pcr policy to apply to the TPM 
    4. generate child key on the TPM with any policy and set its "sensitive" data to _inner encryption key_
@@ -513,9 +514,9 @@ to `Decrypt`:
 on `TPM-A`:
 
    3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
-      `go-kms-wrapping.Encrypt` function will return a new _inner encryption key_ (`env.Key`), initialization vector and cipher text
+      This will return a new _inner encryption key_ (`env.Key`), initialization vector and cipher text
    4. create a trial session with `PolicyDuplicateSelect` using `TPM-B`'s ekpub
-   5. create a TPM key of type `tpm2.TPMAlgKeyedHash,` on `TPM-A` with additional userAuth or `PolicyPCR` and then used with a `PolicyOR` over the trial session.
+   5. create a TPM key of type `tpm2.TPMAlgKeyedHash` on `TPM-A` with userAuth+`PolicyDuplicateSelect` or as `PolicyOr[PolicyDuplicateSelect||PolicyPCR]`.
    6. set the `env.Key` as the TPM keys sensitive part (i.,e seal data)
    7. duplicate the TPM based key using the `Policyduplicateselect` and a real session
 
