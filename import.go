@@ -1,8 +1,6 @@
 package tpmwrap
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
@@ -17,7 +15,6 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrappb "github.com/salrashid123/go-tpm-wrapping/tpmwrappb"
-	tpmrand "github.com/salrashid123/tpmrand"
 	context "golang.org/x/net/context"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -275,31 +272,9 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		_, _ = flush.Execute(rwr)
 	}()
 
-	var kek []byte
 	var dupPub []byte
 	var dupDup []byte
 	var dupSeed []byte
-
-	// create an initialization vector for the inner TPM based AES key
-	iv := make([]byte, aes.BlockSize)
-	// _, err = io.ReadFull(rand.Reader, iv)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("can't create IV %v", err)
-	// }
-
-	r, err := tpmrand.NewTPMRand(&tpmrand.Reader{
-		TpmDevice:        rwc,
-		EncryptionHandle: createEKRsp.ObjectHandle,
-		EncryptionPub:    encryptionPub,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("can't create tpmrandom generator %v", err)
-	}
-
-	_, err = io.ReadFull(r, iv)
-	if err != nil {
-		return nil, fmt.Errorf("can't create IV %v", err)
-	}
 
 	// get the pcr values specified to bind against
 	pcrMap, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
@@ -318,35 +293,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	// if we have pcrValues set, then we're using PCRPolicy, otherwise userAuth
 	if s.pcrValues != "" {
-
-		// first create any random per-use AES key in memory
-		primarySensitive := make([]byte, aes.BlockSize)
-		// if _, err := io.ReadFull(rand.Reader, primarySensitive); err != nil {
-		// 	return nil, fmt.Errorf("error creating inner key %v", err)
-		// }
-
-		_, err = io.ReadFull(r, primarySensitive)
-		if err != nil {
-			return nil, fmt.Errorf("can't create IV %v", err)
-		}
-
-		// create a TPM-based AES key and specify its to be the per-use AES key.
-		//  We're first using a plain aes.NewCFBEncrypter() to wrap env.Key because
-		//  we probably can't use the local TPM's to encrypt since its PCRs may not
-		//  match what we need on the target TPM (i.e, the local and target TPM's PCRs may not match)
-		byteMsg := []byte(env.Key)
-		block, err := aes.NewCipher(primarySensitive)
-		if err != nil {
-			return nil, fmt.Errorf("could not create new cipher: %v", err)
-		}
-		cipherTextWithIV := make([]byte, aes.BlockSize+len(byteMsg))
-		stream := cipher.NewCFBEncrypter(block, iv)
-		stream.XORKeyStream(cipherTextWithIV[aes.BlockSize:], byteMsg)
-
-		kek = cipherTextWithIV[aes.BlockSize:]
-
-		// at this point, we need to create a new key with the same per-use AES key
-		// but this one has an auth policy set to PCRs and used for duplication
 
 		// create a pcr trial session to get its digest
 		pcr_sess_trial, pcr_sess_trial_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16, []tpm2.AuthOption{tpm2.Trial(), tpm2.AESEncryption(128, tpm2.EncryptInOut), tpm2.Salted(createEKRsp.ObjectHandle, *encryptionPub)}...)
@@ -438,7 +384,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			return nil, fmt.Errorf("error purging session: %v", err)
 		}
 
-		// create a new key with the same sensitive data but for this, set the AuthPolicy to the policyOR
+		// create a sealed hash where we can encode the root key (env.Key)
 		createLoadedRespNew, err := tpm2.CreateLoaded{
 			ParentHandle: tpm2.AuthHandle{
 				Handle: cPrimary.ObjectHandle,
@@ -446,35 +392,20 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 			},
 			InPublic: tpm2.New2BTemplate(&tpm2.TPMTPublic{
-				Type:    tpm2.TPMAlgSymCipher,
+				Type:    tpm2.TPMAlgKeyedHash,
 				NameAlg: tpm2.TPMAlgSHA256,
 				ObjectAttributes: tpm2.TPMAObject{
 					FixedTPM:            false,
 					FixedParent:         false,
 					UserWithAuth:        false,
 					SensitiveDataOrigin: false, // set false since w'ere setting the sensitive
-					Decrypt:             true,
-					SignEncrypt:         true,
 				},
 				AuthPolicy: tpm2.TPM2BDigest{Buffer: or_trial_digest.PolicyDigest.Buffer}, // PolicyOr digest
-				Parameters: tpm2.NewTPMUPublicParms(
-					tpm2.TPMAlgSymCipher,
-					&tpm2.TPMSSymCipherParms{
-						Sym: tpm2.TPMTSymDefObject{
-							Algorithm: tpm2.TPMAlgAES,
-							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-							KeyBits: tpm2.NewTPMUSymKeyBits(
-								tpm2.TPMAlgAES,
-								tpm2.TPMKeyBits(128),
-							),
-						},
-					},
-				),
 			}),
 			InSensitive: tpm2.TPM2BSensitiveCreate{
 				Sensitive: &tpm2.TPMSSensitiveCreate{
 					Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
-						Buffer: primarySensitive, // <<<<<<<<<<<<<<<<<<<<<< the per-use key
+						Buffer: env.Key,
 					}),
 				},
 			},
@@ -587,7 +518,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			return nil, fmt.Errorf("error executing PolicyGetDigest: %v", err)
 		}
 
-		// create an AES key bound with this authPolicy
+		// create an key bound with this authPolicy where the root env.Key is the sensitive to unseal
 		createLoadedResp, err := tpm2.CreateLoaded{
 			ParentHandle: tpm2.AuthHandle{
 				Handle: cPrimary.ObjectHandle,
@@ -595,36 +526,24 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 				Auth:   tpm2.PasswordAuth(nil),
 			},
 			InPublic: tpm2.New2BTemplate(&tpm2.TPMTPublic{
-				Type:    tpm2.TPMAlgSymCipher,
+				Type:    tpm2.TPMAlgKeyedHash,
 				NameAlg: tpm2.TPMAlgSHA256,
 				ObjectAttributes: tpm2.TPMAObject{
 					FixedTPM:            false,
 					FixedParent:         false,
 					UserWithAuth:        true,
-					SensitiveDataOrigin: true,
-					Decrypt:             true,
-					SignEncrypt:         true,
+					SensitiveDataOrigin: false, // set false since w'ere setting the sensitive
 				},
 				AuthPolicy: tpm2.TPM2BDigest{Buffer: pgd.PolicyDigest.Buffer}, // auth policy with PolicyDuplicationSelect
-				Parameters: tpm2.NewTPMUPublicParms(
-					tpm2.TPMAlgSymCipher,
-					&tpm2.TPMSSymCipherParms{
-						Sym: tpm2.TPMTSymDefObject{
-							Algorithm: tpm2.TPMAlgAES,
-							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-							KeyBits: tpm2.NewTPMUSymKeyBits(
-								tpm2.TPMAlgAES,
-								tpm2.TPMKeyBits(128),
-							),
-						},
-					},
-				),
 			}),
 			InSensitive: tpm2.TPM2BSensitiveCreate{
 				Sensitive: &tpm2.TPMSSensitiveCreate{
 					UserAuth: tpm2.TPM2BAuth{
 						Buffer: []byte(s.userAuth), // set any userAuth
 					},
+					Data: tpm2.NewTPMUSensitiveCreate(&tpm2.TPM2BSensitiveData{
+						Buffer: env.Key,
+					}),
 				},
 			},
 		}.Execute(rwr, rsessInOut)
@@ -703,18 +622,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		dupSeed = duplicateResp.OutSymSeed.Buffer
 		dupDup = duplicateResp.Duplicate.Buffer
 
-		// now use the inner AES key and the userAuth policy we set on the TPM-based AES key
-		//  to encrypt the provided key by the go-wrapping library (i.,e use the TPM key to encrypt (env.Key) which is the DEK)
-		keyAuth2 := tpm2.AuthHandle{
-			Handle: createLoadedResp.ObjectHandle,
-			Name:   createLoadedResp.Name,
-			Auth:   tpm2.PasswordAuth([]byte(s.userAuth)),
-		}
-		kek, err = encryptDecryptSymmetric(rwr, keyAuth2, iv, env.Key, rsessInOut, false)
-		if err != nil {
-			return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
-		}
-
 	}
 
 	// create the protobuf and include specifications of the duplicated key we just used
@@ -740,9 +647,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		Key: &tpmwrappb.Secret_DuplicatedOp{
 			&tpmwrappb.DuplicatedKey{
 				Name:    s.keyName,
-				Kek:     kek,
 				EkPub:   []byte(s.encryptingPublicKey),
-				Iv:      iv, // this is the 'per use aes key' iv we just created
 				DupPub:  dupPub,
 				DupDup:  dupDup,
 				DupSeed: dupSeed,
@@ -922,7 +827,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		}
 
 		if !rsaPubK.Equal(rsaPubP) {
-			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s\n", string(ekPubDup), string(ekPubParam))
+			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
 		}
 	}
 
@@ -1143,21 +1048,22 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				PHashList:     tpm2.TPMLDigest{Digests: []tpm2.TPM2BDigest{pcrpgd.PolicyDigest, dupselpgd.PolicyDigest}},
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("aaa error setting policyOR %v", err)
+				return nil, fmt.Errorf("error setting policyOR %v", err)
 			}
 
-			// we now have a session which'll allow us to decrypt the DEK
-			keyAuth2 := tpm2.AuthHandle{
-				Handle: loadkRsp.ObjectHandle,
-				Name:   loadkRsp.Name,
-				Auth:   or_sess,
-			}
-
-			// use the imported key to decrypt the original key we used in `go-kms-wrapping#Envelope.Encrypt()`
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessInOut, true)
+			// now unseal the sensitive bit (this was the original env.Key value set during encryption)
+			unseaResp, err := tpm2.Unseal{
+				ItemHandle: tpm2.AuthHandle{
+					Handle: loadkRsp.ObjectHandle,
+					Name:   loadkRsp.Name,
+					Auth:   or_sess,
+				},
+			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
+				return nil, fmt.Errorf("Unseal failed: %s", err)
 			}
+
+			decrypted = unseaResp.OutData.Buffer
 
 		} else {
 
@@ -1168,18 +1074,18 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				return nil, fmt.Errorf("can't close TPM %v", err)
 			}
 
-			// setup an auth handle for the duplicated key and specify the userAuth (password)
-			keyAuth2 := tpm2.AuthHandle{
-				Handle: loadkRsp.ObjectHandle,
-				Name:   loadkRsp.Name,
-				Auth:   tpm2.PasswordAuth([]byte(s.userAuth)),
+			unseaResp, err := tpm2.Unseal{
+				ItemHandle: tpm2.AuthHandle{
+					Handle: loadkRsp.ObjectHandle,
+					Name:   loadkRsp.Name,
+					Auth:   tpm2.PasswordAuth([]byte(s.userAuth)),
+				},
+			}.Execute(rwr)
+			if err != nil {
+				return nil, fmt.Errorf("Unseal failed: %s", err)
 			}
 
-			// decrypt the DEK
-			decrypted, err = encryptDecryptSymmetric(rwr, keyAuth2, pbk.DuplicatedOp.Iv, pbk.DuplicatedOp.Kek, rsessInOut, true)
-			if err != nil {
-				return nil, fmt.Errorf("EncryptSymmetric failed: %s", err)
-			}
+			decrypted = unseaResp.OutData.Buffer
 		}
 
 		// set the original encryption key, the iv and ciphertext as the struct

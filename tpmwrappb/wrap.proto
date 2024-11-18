@@ -32,10 +32,8 @@ message SealedKey {
 
 message DuplicatedKey {
   string name = 1;
-  bytes kek = 2;
-  bytes iv = 3;  
-  bytes ekPub = 4;
-  bytes dupPub = 5;
-  bytes dupDup = 6;
-  bytes dupSeed = 7;
+  bytes ekPub = 2;
+  bytes dupPub = 3;
+  bytes dupDup = 4;
+  bytes dupSeed = 5;
 }
