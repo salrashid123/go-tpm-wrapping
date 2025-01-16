@@ -55,7 +55,7 @@ func openTPM(path string) (io.ReadWriteCloser, error) {
 	if slices.Contains(TPMDEVICES, path) {
 		return tpmutil.OpenTPM(path)
 	} else if path == "simulator" {
-		return simulator.GetWithFixedSeedInsecure(1073741825)
+		return simulator.Get()
 	} else {
 		return net.Dial("tcp", path)
 	}

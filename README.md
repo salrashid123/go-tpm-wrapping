@@ -76,6 +76,8 @@ To use, simply initialize the wrapper as shown below, specify a path to the TPM 
 
 To use as a CLI, you can run `cmd/main.go` or download from the [Releases](/releases) page.  If you want to use as an API, see the [example/](/tree/main/example) folder
 
+The following uses a software TPM (`swtpm`) which you can configure with the instructions provided at the end.  In real life you'd use a real TPM (`--tpm-path=/dev/tpmrm0`)
+
 - **encrypt/decrypt**
 
 ```bash
@@ -181,14 +183,14 @@ The following encrypts some data using just the remote `ekpub`
 
 - **encrypt/decrypt**
 
+The following uses a local software TPM to generate and encrypt the transfer key but you can just as easily use a simulator instead `--tpm-path="simulator"`.  To decrypt you would need to specify a TPM (swtpm or real)
+
 ```bash
 # encrypt
 $ go-tpm-wrapping --mode=import --debug  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2321"
-
-# note, you can even encrypt the data with a --tpm-path="simulator"
 ```
 
 - copy scp `/tmp/encrypted.json` to VM
