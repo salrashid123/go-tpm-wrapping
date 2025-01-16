@@ -1,6 +1,7 @@
 package tpmwrap
 
 import (
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
@@ -171,26 +172,47 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf(" error decoding public key  : %v", err)
 	}
 
+	var ekPububFromPEMTemplate tpm2.TPMTPublic
+
 	block, _ := pem.Decode(pubPEMData)
 	parsedKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf(" unable parsing encrypting public key : %v", err)
 	}
 
-	// to do  support EC keys
-	rsaPub, ok := parsedKey.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+	switch pub := parsedKey.(type) {
+	case *rsa.PublicKey:
+		rsaPub, ok := parsedKey.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+		}
+		ekPububFromPEMTemplate = tpm2.RSAEKTemplate
+		ekPububFromPEMTemplate.Unique = tpm2.NewTPMUPublicID(
+			tpm2.TPMAlgRSA,
+			&tpm2.TPM2BPublicKeyRSA{
+				Buffer: rsaPub.N.Bytes(),
+			},
+		)
+	case *ecdsa.PublicKey:
+		ecPub, ok := parsedKey.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf(" error converting encryptingPublicKey to ecdsa")
+		}
+		ekPububFromPEMTemplate = tpm2.ECCEKTemplate
+		ekPububFromPEMTemplate.Unique = tpm2.NewTPMUPublicID(
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCPoint{
+				X: tpm2.TPM2BECCParameter{
+					Buffer: ecPub.X.Bytes(), // ecPub.X.FillBytes(make([]byte, len(ecPub.X.Bytes()))),
+				},
+				Y: tpm2.TPM2BECCParameter{
+					Buffer: ecPub.Y.Bytes(), // ecPub.Y.FillBytes(make([]byte, len(ecPub.Y.Bytes()))),
+				},
+			},
+		)
+	default:
+		return nil, fmt.Errorf("unsupported public key type %v", pub)
 	}
-
-	// since we only support RSAEK keys on TPM-A (the remote TPM), we know how to get its name
-	ekPububFromPEMTemplate := tpm2.RSAEKTemplate
-	ekPububFromPEMTemplate.Unique = tpm2.NewTPMUPublicID(
-		tpm2.TPMAlgRSA,
-		&tpm2.TPM2BPublicKeyRSA{
-			Buffer: rsaPub.N.Bytes(),
-		},
-	)
 
 	ekName, err := tpm2.ObjectName(&ekPububFromPEMTemplate)
 	if err != nil {
@@ -791,6 +813,9 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	// if the encoded protobuf saved the PEM key we used to do the duplicate, comapre
 	// that with the current EK we just got.  This step isn't necessary since we
 	// wont' be able to decrypt anyway
+
+	var pubAlg tpm2.TPM2BPublic
+
 	if s.encryptingPublicKey != "" {
 
 		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.EkPub))
@@ -805,11 +830,6 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			return nil, fmt.Errorf(" unable parsing encrypting public key from blob : %v", err)
 		}
 
-		rsaPubK, ok := parsedK.(*rsa.PublicKey)
-		if !ok {
-			return nil, fmt.Errorf(" error converting encryptingPublicKey encrypting public key from blob")
-		}
-
 		ekPubParam, err := hex.DecodeString(string(s.encryptingPublicKey))
 		if err != nil {
 			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
@@ -821,13 +841,35 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			return nil, fmt.Errorf(" unable parsing encrypting public key from parameter : %v", err)
 		}
 
-		rsaPubP, ok := parsedP.(*rsa.PublicKey)
-		if !ok {
-			return nil, fmt.Errorf(" error converting  public key from blob")
-		}
-
-		if !rsaPubK.Equal(rsaPubP) {
-			return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
+		switch pub := parsedP.(type) {
+		case *rsa.PublicKey:
+			rsaPubPK, ok := parsedK.(*rsa.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+			}
+			rsaPubP, ok := parsedP.(*rsa.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+			}
+			if !rsaPubP.Equal(rsaPubPK) {
+				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
+			}
+			pubAlg = tpm2.New2B(tpm2.RSAEKTemplate)
+		case *ecdsa.PublicKey:
+			ecPubPK, ok := parsedK.(*ecdsa.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf(" error converting encryptingPublicKey to ec")
+			}
+			ecPubP, ok := parsedP.(*ecdsa.PublicKey)
+			if !ok {
+				return nil, fmt.Errorf(" error converting encryptingPublicKey to ec")
+			}
+			if !ecPubP.Equal(ecPubPK) {
+				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
+			}
+			pubAlg = tpm2.New2B(tpm2.ECCEKTemplate)
+		default:
+			return nil, fmt.Errorf("unsupported public key type %v", pub)
 		}
 	}
 
@@ -856,7 +898,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
 				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
 			},
-			InPublic: tpm2.New2B(tpm2.RSAEKTemplate), // tpm2.New2B(ECCSRKHTemplate),
+			InPublic: pubAlg,
 		}.Execute(rwr, rsessInOut)
 		if err != nil {
 			return nil, fmt.Errorf("can't create primary TPM %v", err)

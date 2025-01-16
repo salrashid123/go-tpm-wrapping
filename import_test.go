@@ -30,12 +30,63 @@ wwIDAQAB
 -----END PUBLIC KEY-----`
 )
 
-func TestImport(t *testing.T) {
+func TestImportRSA(t *testing.T) {
 	tpmDevice, err := simulator.Get()
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
 	ek, err := client.EndorsementKeyRSA(tpmDevice)
+	require.NoError(t, err)
+	defer ek.Close()
+
+	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	require.NoError(t, err)
+	pemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+	ek.Close()
+
+	ctx := context.Background()
+
+	keyName := "bar"
+
+	wrapper := NewRemoteWrapper()
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	require.NoError(t, err)
+
+	require.Equal(t, keyName, newBlobInfo.KeyInfo.KeyId)
+
+	require.Equal(t, dataToSeal, plaintext)
+}
+
+func TestImportECC(t *testing.T) {
+	tpmDevice, err := simulator.Get()
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	ek, err := client.EndorsementKeyECC(tpmDevice)
 	require.NoError(t, err)
 	defer ek.Close()
 
