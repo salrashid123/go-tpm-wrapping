@@ -653,6 +653,18 @@ $ /usr/local/bin/protoc -I ./ --include_imports \
    --go_out=paths=source_relative:. tpmwrappb/wrap.proto
 ```
 
+#### Verify Release Binary
+
+```bash
+gpg --keyserver keys.openpgp.org --recv-keys 3FCD7ECFB7345F2A98F9F346285AEDB3D5B5EF74
+
+## to verify the checksum file for a given release:
+wget https://github.com/salrashid123/go-tpm-wrapping/releases/download/v0.7.5/go-tpm-wrapping_0.7.5_linux_amd64
+wget https://github.com/salrashid123/go-tpm-wrapping/releases/download/v0.7.5/go-tpm-wrapping_0.7.5_linux_amd64.sig
+
+gpg --verify go-tpm-wrapping_0.7.5_linux_amd64.sig go-tpm-wrapping_0.7.5_linux_amd64
+```
+
 #### Seal/Import with non-EKPub
 
 _TODO_
