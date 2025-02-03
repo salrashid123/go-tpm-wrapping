@@ -46,4 +46,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_FINGERPRINT: ${{ env.GPG_FINGERPRINT }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
