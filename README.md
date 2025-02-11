@@ -474,6 +474,31 @@ xxd -p -c 100 /tmp/ekpubAname.bin
 
 which you can use to verify end-to-end provence
 
+```bash
+$ wget https://github.com/salrashid123/go-tpm-wrapping/releases/download/v0.7.7/go-tpm-wrapping_0.7.7_linux_amd64
+$ wget https://github.com/salrashid123/go-tpm-wrapping/attestations/4912486/download -O salrashid123-go-tpm-wrapping-attestation-4912486.json
+
+$ gh attestation verify --owner salrashid123 --bundle salrashid123-go-tpm-wrapping-attestation-4912486.json go-tpm-wrapping_0.7.7_linux_amd64 
+
+      Loaded digest sha256:b41bdd15c978353a0ebd088431f47663ebb845e4cd1ea4abc639d3748fa6866f for file://go-tpm-wrapping_0.7.7_linux_amd64
+      Loaded 1 attestation from salrashid123-go-tpm-wrapping-attestation-4912486.json
+
+      The following policy criteria will be enforced:
+      - Predicate type must match:................ https://slsa.dev/provenance/v1
+      - Source Repository Owner URI must match:... https://github.com/salrashid123
+      - Subject Alternative Name must match regex: (?i)^https://github.com/salrashid123/
+      - OIDC Issuer must match:................... https://token.actions.githubusercontent.com
+
+      ✓ Verification succeeded!
+
+      The following 1 attestation matched the policy criteria
+
+      - Attestation #1
+      - Build repo:..... salrashid123/go-tpm-wrapping
+      - Build workflow:. .github/workflows/release.yaml@refs/tags/v0.7.7
+      - Signer repo:.... salrashid123/go-tpm-wrapping
+      - Signer workflow: .github/workflows/release.yaml@refs/tags/v0.7.7
+```
 
 ### Background
 
