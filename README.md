@@ -465,6 +465,16 @@ xxd -p -c 100 /tmp/ekpubAname.bin
    --tpm-session-encrypt-with-name=000b47ab97fdda365cbb86a37548e38468f72e8baccc633cffc42402183679956608
 ```
 
+### Verify Binary Attestation
+
+`go-tpm-wrapping` release binaries are generated using github workflow and golreaser.  Part of that flow generates github attestation reportsat
+
+
+* [https://github.com/salrashid123/go-tpm-wrapping/attestations](https://github.com/salrashid123/go-tpm-wrapping/attestations)
+
+which you can use to verify end-to-end provence
+
+
 ### Background
 
 The following details some background how each of these modes works:
