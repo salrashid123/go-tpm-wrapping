@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"os"
+
+	//rdebug "runtime/debug"
 	"slices"
 
 	"github.com/google/go-tpm-tools/simulator"
@@ -33,12 +35,15 @@ var (
 
 	decrypt = flag.Bool("decrypt", false, "set --decrypt perform decryption (default encrypt)")
 	debug   = flag.Bool("debug", false, "verbose output")
+	version = flag.Bool("version", false, "print version")
 
 	encrypting_public_key = flag.String("encrypting_public_key", "", "Public Key to encrypt with")
 
 	encryptedBlob = flag.String("encryptedBlob", "/tmp/encrypted.json", "Encrypted Blob")
 
 	sessionEncryptionName = flag.String("tpm-session-encrypt-with-name", "", "hex encoded TPM object 'name' to use with an encrypted session")
+
+	Commit, Tag, Date string
 )
 
 var TPMDEVICES = []string{"/dev/tpm0", "/dev/tpmrm0"}
@@ -56,6 +61,14 @@ func OpenTPM(path string) (io.ReadWriteCloser, error) {
 func main() {
 
 	flag.Parse()
+
+	if *version {
+		// go build  -ldflags="-s -w -X main.Tag=$(git describe --tags --abbrev=0) -X main.Commit=$(git rev-parse HEAD)" cmd/main.go
+		fmt.Printf("Version: %s\n", Tag)
+		fmt.Printf("Date: %s\n", Date)
+		fmt.Printf("Commit: %s\n", Commit)
+		os.Exit(0)
+	}
 
 	ctx := context.Background()
 	if *mode == "seal" {
