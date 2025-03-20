@@ -601,10 +601,11 @@ tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 tpm2_print -t TPM2B_PUBLIC /tmp/ekB.pub  
 
-## On TPM-A, create key with userauth
+## On TPM-A, create key with userauth, pcr and policyduplicate
 
 export TPM2TOOLS_TCTI="swtpm:port=2321"
 export TPM2OPENSSL_TCTI="swtpm:port=2321"
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 ## load TPM-B's ekpub and get its 'name'
 tpm2_loadexternal -C o -u /tmp/ekB.pub  -c new_parent.ctx -n dst_n.name
@@ -613,15 +614,30 @@ tpm2_loadexternal -C o -u /tmp/ekB.pub  -c new_parent.ctx -n dst_n.name
 printf '\x00\x00' > unique.dat
 tpm2_createprimary -C o -G ecc  -g sha256  -c primary.ctx -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt" -u unique.dat 
 
-## now create a key with policyduplicateselect
+### first PCR
+tpm2_pcrread -o pcr23_valA.bin "sha256:23" 
+xxd -c 100 -p pcr23_valA.bin
 tpm2_startauthsession -S session.dat
-tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L dpolicy.dat 
+tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
 tpm2_flushcontext session.dat
 rm session.dat
 
+## now create a key with policyduplicateselect
+tpm2_startauthsession -S session.dat
+tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L policyA_dupselect.dat 
+tpm2_flushcontext session.dat
+rm session.dat
+
+### create an OR policy together
+tpm2_startauthsession -S session.dat
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_pcr.dat,policyA_dupselect.dat 
+tpm2_flushcontext session.dat
+
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
 echo "my sealed data" > seal.dat
-tpm2_create -C primary.ctx -i seal.dat -u key.pub -r key.priv -L policy.dat -a "userwithauth"  -L dpolicy.dat -p foo
+
+tpm2_create -C primary.ctx -i seal.dat -u key.pub -r key.priv -L policy.dat -a ""  -L policyA_or.dat -p foo
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 tpm2_load -C primary.ctx -r key.priv -u key.pub -c key.ctx
@@ -631,8 +647,8 @@ tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 ## now duplicate
 tpm2_startauthsession --policy-session -S session.dat
 tpm2_readpublic -c key.ctx -n dupkey.name
-tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L dpolicy.dat  -n dupkey.name
-
+tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L policyA_dupselect.dat  -n dupkey.name
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_pcr.dat,policyA_dupselect.dat 
 tpm2_duplicate -C new_parent.ctx -c key.ctx -G null  -p "session:session.dat" -r dup.dup -s dup.seed
 
 ### these dup* bits are what get encoded into 
@@ -658,9 +674,26 @@ tpm2 policysecret --session session.ctx --object-context endorsement
 tpm2_load -C /tmp/primaryB.ctx -c imported_key.ctx -u /tmp/dup.pub -r dup.prv  --auth session:session.ctx
 
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
-tpm2_unseal -o unseal.dat -c imported_key.ctx -p foo
+
+tpm2_pcrread -o pcr23_valA.bin "sha256:23" 
+xxd -c 100 -p pcr23_valA.bin
+tpm2_startauthsession --policy-session  -S session.dat
+tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
+tpm2_flushcontext session.dat
+
+tpm2_startauthsession --policy-session  -S session.dat
+tpm2_policyduplicationselect -S session.dat  -N /tmp/ekpubBname.bin -L policyA_dupselect.dat
+tpm2_flushcontext session.dat
+
+tpm2_startauthsession --policy-session -S session.dat
+tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_pcr.dat,policyA_dupselect.dat 
+
+tpm2_unseal -o unseal.dat -c imported_key.ctx -p foo -p "session:session.dat" 
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 cat unseal.dat
+  my sealed data
 ```
 
 ---
