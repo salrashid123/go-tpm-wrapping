@@ -3,7 +3,10 @@ package tpmwrap
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"testing"
 
 	"github.com/google/go-tpm-tools/simulator"
@@ -189,6 +192,80 @@ func TestSealPasswordFail(t *testing.T) {
 
 	wrapper := NewWrapper()
 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	wrapper.userAuth = "bar"
+
+	_, err = wrapper.Decrypt(ctx, newBlobInfo)
+	require.Error(t, err)
+}
+
+func TestSealEncryptedSessionPassword(t *testing.T) {
+	tpmDevice, err := simulator.Get()
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	ctx := context.Background()
+
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	createEKRsp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+	defer func() {
+		flushContextCmd := tpm2.FlushContext{
+			FlushHandle: createEKRsp.ObjectHandle,
+		}
+		_, _ = flushContextCmd.Execute(rwr)
+	}()
+
+	outPub, err := createEKRsp.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	akBytes, err := x509.MarshalPKIXPublicKey(rsaPub)
+	require.NoError(t, err)
+
+	akPubPEM := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: akBytes,
+		},
+	)
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: createEKRsp.ObjectHandle,
+	}
+	_, _ = flushContextCmd.Execute(rwr)
+
+	keyName := hex.EncodeToString(createEKRsp.Name.Buffer)
+	wrapper := NewWrapper()
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"), WithEncryptingPublicKey(hex.EncodeToString(akPubPEM)), WithKeyName(keyName))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
