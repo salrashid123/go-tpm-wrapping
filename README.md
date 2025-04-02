@@ -701,7 +701,7 @@ tpm2_startauthsession --policy-session -S session.dat
 tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
 tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_pcr.dat,policyA_dupselect.dat 
 
-tpm2_unseal -o unseal.dat -c imported_key.ctx -p "session:session.dat+foox" 
+tpm2_unseal -o unseal.dat -c imported_key.ctx -p "session:session.dat+foo" 
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
 cat unseal.dat
