@@ -3,13 +3,14 @@ package tpmwrap
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"testing"
 
-	"github.com/google/go-tpm-tools/client"
 	"github.com/google/go-tpm-tools/simulator"
 	tpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -35,11 +36,32 @@ func TestImportRSA(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -47,7 +69,12 @@ func TestImportRSA(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -86,11 +113,44 @@ func TestImportECC(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyECC(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.ECCEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	ecDetail, err := outPub.Parameters.ECCDetail()
+	require.NoError(t, err)
+
+	crv, err := ecDetail.CurveID.Curve()
+	require.NoError(t, err)
+
+	eccUnique, err := outPub.Unique.ECC()
+	require.NoError(t, err)
+
+	pubKey := &ecdsa.PublicKey{
+		Curve: crv,
+		X:     big.NewInt(0).SetBytes(eccUnique.X.Buffer),
+		Y:     big.NewInt(0).SetBytes(eccUnique.Y.Buffer),
+	}
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(pubKey)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -98,7 +158,6 @@ func TestImportECC(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
 
 	ctx := context.Background()
 
@@ -137,11 +196,32 @@ func TestImportPCR(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -149,7 +229,12 @@ func TestImportPCR(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -184,11 +269,32 @@ func TestImportPCRFail(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -196,7 +302,12 @@ func TestImportPCRFail(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	pcr := uint(23)
@@ -219,8 +330,6 @@ func TestImportPCRFail(t *testing.T) {
 	newBlobInfo := &wrapping.BlobInfo{}
 	err = protojson.Unmarshal(b, newBlobInfo)
 	require.NoError(t, err)
-
-	rwr := transport.FromReadWriter(tpmDevice)
 
 	pcrReadRsp, err := tpm2.PCRRead{
 		PCRSelectionIn: tpm2.TPMLPCRSelection{
@@ -259,10 +368,32 @@ func TestImportEKFail(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
 	require.NoError(t, err)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	ekpemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -270,7 +401,11 @@ func TestImportEKFail(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -307,11 +442,32 @@ func TestImportPassword(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -319,7 +475,11 @@ func TestImportPassword(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
@@ -360,11 +520,32 @@ func TestImportPasswordFail(t *testing.T) {
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
-	ek, err := client.EndorsementKeyRSA(tpmDevice)
-	require.NoError(t, err)
-	defer ek.Close()
+	rwr := transport.FromReadWriter(tpmDevice)
 
-	rb, err := x509.MarshalPKIXPublicKey(ek.PublicKey())
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
 	require.NoError(t, err)
 	pemdata := pem.EncodeToMemory(
 		&pem.Block{
@@ -372,7 +553,12 @@ func TestImportPasswordFail(t *testing.T) {
 			Bytes: rb,
 		},
 	)
-	ek.Close()
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 
