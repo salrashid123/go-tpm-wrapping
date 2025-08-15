@@ -71,7 +71,8 @@ func main() {
 	}
 
 	ctx := context.Background()
-	if *mode == "seal" {
+	switch *mode {
+	case "seal":
 		if !*decrypt {
 			wrapper := tpmwrap.NewWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
@@ -123,6 +124,7 @@ func main() {
 				tpmwrap.TPM_PATH:                *tpmPath,
 				tpmwrap.USER_AUTH:               *keyPass,
 				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
+				tpmwrap.PCR_VALUES:              *pcrValues,
 				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
 			}))
 			if err != nil {
@@ -154,7 +156,7 @@ func main() {
 			fmt.Printf("%s", string(plaintext))
 		}
 
-	} else if *mode == "import" {
+	case "import":
 		if !*decrypt {
 			b, err := os.ReadFile(*encrypting_public_key)
 			if err != nil {
@@ -164,13 +166,11 @@ func main() {
 
 			wrapper := tpmwrap.NewRemoteWrapper()
 			_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:                *tpmPath,
-				tpmwrap.ENCRYPTING_PUBLIC_KEY:   hex.EncodeToString(b),
-				tpmwrap.USER_AUTH:               *keyPass,
-				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
-				tpmwrap.PCR_VALUES:              *pcrValues,
-				tpmwrap.KEY_NAME:                *keyName,
-				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
+				tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
+				tpmwrap.USER_AUTH:             *keyPass,
+				tpmwrap.HIERARCHY_AUTH:        *hierarchyPass,
+				tpmwrap.PCR_VALUES:            *pcrValues,
+				tpmwrap.KEY_NAME:              *keyName,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
@@ -262,7 +262,7 @@ func main() {
 
 		}
 
-	} else {
+	default:
 		fmt.Println("--mode must be either seal or import")
 		os.Exit(1)
 	}

@@ -382,7 +382,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 		UserAuth: hasUserAuth,
 		Key: &tpmwrappb.Secret_SealedOp{
 			&tpmwrappb.SealedKey{
-				Keyfile: kfb.Bytes(),
+				Keyfile: string(kfb.Bytes()),
 			},
 		},
 	}
@@ -514,19 +514,42 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 			return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
 		}
 
+		if wrappb.Version != KEY_VERSION {
+			return nil, fmt.Errorf("key is encoded by key version [%d] which is incompatile with the current version [%d]", wrappb.Version, KEY_VERSION)
+		}
+
 		if s.debug {
 			fmt.Printf("Decrypting with name %s\n", wrappb.Name)
 		}
 
 		// get a list of the pcr's used in the sealing
 		var pcrList []uint
-		for _, v := range wrappb.Pcrs {
-			pcrList = append(pcrList, uint(v.Pcr))
+		var pcrDigest []byte
+		if s.pcrValues != "" {
+			var l map[uint][]byte
+			l, pcrList, pcrDigest, err = getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
+			if err != nil {
+				return nil, fmt.Errorf(" error parsing pcrmap: %v", err)
+			}
 			if s.debug {
-				fmt.Printf("Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
+				fmt.Printf("PCRList provided with command line: %v \n", l)
+			}
+		} else {
+			for _, v := range wrappb.Pcrs {
+				pcrList = append(pcrList, uint(v.Pcr))
+				if s.debug {
+					fmt.Printf("Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
+				}
 			}
 		}
-
+		sel := tpm2.TPMLPCRSelection{
+			PCRSelections: []tpm2.TPMSPCRSelection{
+				{
+					Hash:      tpm2.TPMAlgSHA256,
+					PCRSelect: tpm2.PCClientCompatible.PCRs(pcrList...),
+				},
+			},
+		}
 		if s.debug {
 			fmt.Printf("Key has password %t\n", wrappb.UserAuth)
 		}
@@ -542,7 +565,7 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		}
 
 		// the wrappedkey is actually the PEM format of the key we used to seal
-		regenKey, err := keyfile.Decode(pbk.SealedOp.Keyfile)
+		regenKey, err := keyfile.Decode([]byte(pbk.SealedOp.Keyfile))
 		if err != nil {
 			return nil, fmt.Errorf("error decrypting regenerated key: %w", err)
 		}
@@ -574,18 +597,9 @@ func (s *TPMWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...
 		}
 		defer cleanup2()
 
-		sel := tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      tpm2.TPMAlgSHA256,
-					PCRSelect: tpm2.PCClientCompatible.PCRs(pcrList...),
-				},
-			},
-		}
-
 		_, err = tpm2.PolicyPCR{
 			PolicySession: sess2.Handle(),
-
+			PcrDigest:     tpm2.TPM2BDigest{Buffer: pcrDigest},
 			Pcrs: tpm2.TPMLPCRSelection{
 				PCRSelections: sel.PCRSelections,
 			},

@@ -27,13 +27,19 @@ message PCRS {
 }
 
 message SealedKey {
-  bytes  keyfile = 1;
+  string  keyfile = 1;
 }
 
 message DuplicatedKey {
   string name = 1;
-  bytes ekPub = 2;
-  bytes dupPub = 3;
-  bytes dupDup = 4;
-  bytes dupSeed = 5;
+  repeated PCRS pcrs = 2;  
+  string keyfile = 3;
+  string parentName = 4;
+  bytes EKPub = 5;
+  ParentKeyType parentKeyType = 6;
+  enum ParentKeyType {
+    EndorsementtECC = 0;
+    EndorsementRSA = 1;
+    H2 = 2;    
+  } 
 }
