@@ -212,7 +212,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		if !ok {
 			return nil, fmt.Errorf(" error converting encryptingPublicKey to ecdsa")
 		}
-		parentKeyType = tpmwrappb.DuplicatedKey_EndorsementtECC
+		parentKeyType = tpmwrappb.DuplicatedKey_EndorsementECC
 		ekPububFromPEMTemplate = tpm2.ECCEKTemplate
 		ekPububFromPEMTemplate.Unique = tpm2.NewTPMUPublicID(
 			tpm2.TPMAlgECC,
@@ -544,7 +544,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			return nil, fmt.Errorf("error packing encryptedseed: %v", err)
 		}
 
-	case tpmwrappb.DuplicatedKey_EndorsementtECC, tpmwrappb.DuplicatedKey_H2:
+	case tpmwrappb.DuplicatedKey_EndorsementECC, tpmwrappb.DuplicatedKey_H2:
 
 		ecp, err := ecdsa.GenerateKey(ekeccPub.Curve, rand.Reader)
 		if err != nil {
@@ -677,7 +677,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		Key: &tpmwrappb.Secret_DuplicatedOp{
 			&tpmwrappb.DuplicatedKey{
 				Name:       s.keyName,
-				EKPub:      []byte(s.encryptingPublicKey),
+				Ekpub:      []byte(s.encryptingPublicKey),
 				ParentName: hex.EncodeToString(ekName.Buffer),
 				Keyfile:    string(keyFileBytes.Bytes()),
 			},
@@ -816,7 +816,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 	if s.encryptingPublicKey != "" {
 
-		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.EKPub))
+		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.Ekpub))
 		if err != nil {
 			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
 		}

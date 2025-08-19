@@ -4,6 +4,12 @@ package tpmwrappb;
 
 option go_package = "github.com/salrashid123/go-tpm-wrapping/tpmwrappb";
 
+/*
+protoc -I ./ --include_imports \
+    --experimental_allow_proto3_optional --include_source_info  \
+      --descriptor_set_out=tpmwrappb/wrap.proto.pb   \
+        --go_out=paths=source_relative:. tpmwrappb/wrap.proto
+*/
 
 message Secret {
   string name = 1;
@@ -35,10 +41,10 @@ message DuplicatedKey {
   repeated PCRS pcrs = 2;  
   string keyfile = 3;
   string parentName = 4;
-  bytes EKPub = 5;
+  bytes ekpub = 5;
   ParentKeyType parentKeyType = 6;
   enum ParentKeyType {
-    EndorsementtECC = 0;
+    EndorsementECC = 0;
     EndorsementRSA = 1;
     H2 = 2;    
   } 

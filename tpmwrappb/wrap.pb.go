@@ -70,22 +70,22 @@ func (Secret_KeyType) EnumDescriptor() ([]byte, []int) {
 type DuplicatedKey_ParentKeyType int32
 
 const (
-	DuplicatedKey_EndorsementtECC DuplicatedKey_ParentKeyType = 0
-	DuplicatedKey_EndorsementRSA  DuplicatedKey_ParentKeyType = 1
-	DuplicatedKey_H2              DuplicatedKey_ParentKeyType = 2
+	DuplicatedKey_EndorsementECC DuplicatedKey_ParentKeyType = 0
+	DuplicatedKey_EndorsementRSA DuplicatedKey_ParentKeyType = 1
+	DuplicatedKey_H2             DuplicatedKey_ParentKeyType = 2
 )
 
 // Enum value maps for DuplicatedKey_ParentKeyType.
 var (
 	DuplicatedKey_ParentKeyType_name = map[int32]string{
-		0: "EndorsementtECC",
+		0: "EndorsementECC",
 		1: "EndorsementRSA",
 		2: "H2",
 	}
 	DuplicatedKey_ParentKeyType_value = map[string]int32{
-		"EndorsementtECC": 0,
-		"EndorsementRSA":  1,
-		"H2":              2,
+		"EndorsementECC": 0,
+		"EndorsementRSA": 1,
+		"H2":             2,
 	}
 )
 
@@ -340,7 +340,7 @@ type DuplicatedKey struct {
 	Pcrs          []*PCRS                     `protobuf:"bytes,2,rep,name=pcrs,proto3" json:"pcrs,omitempty"`
 	Keyfile       string                      `protobuf:"bytes,3,opt,name=keyfile,proto3" json:"keyfile,omitempty"`
 	ParentName    string                      `protobuf:"bytes,4,opt,name=parentName,proto3" json:"parentName,omitempty"`
-	EKPub         []byte                      `protobuf:"bytes,5,opt,name=EKPub,proto3" json:"EKPub,omitempty"`
+	Ekpub         []byte                      `protobuf:"bytes,5,opt,name=ekpub,proto3" json:"ekpub,omitempty"`
 	ParentKeyType DuplicatedKey_ParentKeyType `protobuf:"varint,6,opt,name=parentKeyType,proto3,enum=tpmwrappb.DuplicatedKey_ParentKeyType" json:"parentKeyType,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -404,9 +404,9 @@ func (x *DuplicatedKey) GetParentName() string {
 	return ""
 }
 
-func (x *DuplicatedKey) GetEKPub() []byte {
+func (x *DuplicatedKey) GetEkpub() []byte {
 	if x != nil {
-		return x.EKPub
+		return x.Ekpub
 	}
 	return nil
 }
@@ -415,7 +415,7 @@ func (x *DuplicatedKey) GetParentKeyType() DuplicatedKey_ParentKeyType {
 	if x != nil {
 		return x.ParentKeyType
 	}
-	return DuplicatedKey_EndorsementtECC
+	return DuplicatedKey_EndorsementECC
 }
 
 var File_tpmwrappb_wrap_proto protoreflect.FileDescriptor
@@ -440,7 +440,7 @@ const file_tpmwrappb_wrap_proto_rawDesc = "" +
 	"\x03pcr\x18\x01 \x01(\x05R\x03pcr\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\"%\n" +
 	"\tSealedKey\x12\x18\n" +
-	"\akeyfile\x18\x01 \x01(\tR\akeyfile\"\xa8\x02\n" +
+	"\akeyfile\x18\x01 \x01(\tR\akeyfile\"\xa7\x02\n" +
 	"\rDuplicatedKey\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
 	"\x04pcrs\x18\x02 \x03(\v2\x0f.tpmwrappb.PCRSR\x04pcrs\x12\x18\n" +
@@ -448,10 +448,10 @@ const file_tpmwrappb_wrap_proto_rawDesc = "" +
 	"\n" +
 	"parentName\x18\x04 \x01(\tR\n" +
 	"parentName\x12\x14\n" +
-	"\x05EKPub\x18\x05 \x01(\fR\x05EKPub\x12L\n" +
-	"\rparentKeyType\x18\x06 \x01(\x0e2&.tpmwrappb.DuplicatedKey.ParentKeyTypeR\rparentKeyType\"@\n" +
-	"\rParentKeyType\x12\x13\n" +
-	"\x0fEndorsementtECC\x10\x00\x12\x12\n" +
+	"\x05ekpub\x18\x05 \x01(\fR\x05ekpub\x12L\n" +
+	"\rparentKeyType\x18\x06 \x01(\x0e2&.tpmwrappb.DuplicatedKey.ParentKeyTypeR\rparentKeyType\"?\n" +
+	"\rParentKeyType\x12\x12\n" +
+	"\x0eEndorsementECC\x10\x00\x12\x12\n" +
 	"\x0eEndorsementRSA\x10\x01\x12\x06\n" +
 	"\x02H2\x10\x02B3Z1github.com/salrashid123/go-tpm-wrapping/tpmwrappbb\x06proto3"
 
