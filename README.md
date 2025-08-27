@@ -594,11 +594,18 @@ on `TPM-B`:
    plaintext1 = go-kms-wrapping.Decrypt(env.key, iv1, ciphertext1) 
    ```
 
-If you want to see the full flow on how the import function works to transfer a key from A to B,
+If you want to see the full flow on how the import function works to transfer a key from A to B:
+
+Note, this utility does not require a TPM on the system where you are transferring _from_ (eg, TPM-B below).  We are only using TPM-B because it is easier to show the flow.
 
 - Initialize
 
 ```bash
+## Initialize TPM-A
+rm -rf /tmp/myvtpm && mkdir /tmp/myvtpm
+swtpm_setup --tpmstate /tmp/myvtpm --tpm2 --create-ek-cert
+swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear
+
 ## Initialize TPM-B
 rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2
 swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert
@@ -610,7 +617,6 @@ swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ct
 ```bash
 export TPM2TOOLS_TCTI="swtpm:port=2341"
 export TPM2OPENSSL_TCTI="swtpm:port=2341"
-tpm2_pcrread sha256:0,23
 
 tpm2_createek -c /tmp/primaryB.ctx -G rsa  -u /tmp/ekB.pub -Q
 tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -n /tmp/ekpubBname.bin -f PEM -Q
@@ -619,7 +625,61 @@ tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 tpm2_print -t TPM2B_PUBLIC /tmp/ekB.pub  
 ```
 
-- On `local`, create key to transfer
+- On `TPM-A`, create key to transfer
+
+```bash
+export TPM2TOOLS_TCTI="swtpm:port=2321"
+export TPM2OPENSSL_TCTI="swtpm:port=2321"
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+## load TPM-B's ekpub and get its 'name'
+tpm2_loadexternal -C o -u /tmp/ekB.pub  -c new_parent.ctx -n dst_n.name
+
+## create an H2 primary
+printf '\x00\x00' > unique.dat
+tpm2_createprimary -C o -G ecc  -g sha256  -c primary.ctx -a "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|restricted|decrypt" -u unique.dat 
+
+### then Auth
+tpm2_startauthsession -S session.dat
+tpm2_policyauthvalue -S session.dat -L policyA_auth.dat 
+tpm2_flushcontext session.dat
+rm session.dat
+
+## now create a key with policyduplicateselect
+tpm2_startauthsession -S session.dat
+tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L policyA_dupselect.dat 
+tpm2_flushcontext session.dat
+rm session.dat
+
+### create an OR policy together
+tpm2_startauthsession -S session.dat
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_auth.dat,policyA_dupselect.dat 
+tpm2_flushcontext session.dat
+
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+echo "my sealed data" > seal.dat
+
+tpm2_create -C primary.ctx -i seal.dat -u key.pub -r key.priv  -L policyA_or.dat -p foo -a ""
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+tpm2_load -C primary.ctx -r key.priv -u key.pub -c key.ctx
+tpm2_readpublic -c key.ctx -o dup.pub
+tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+
+## now duplicate
+tpm2_startauthsession --policy-session -S session.dat
+tpm2_readpublic -c key.ctx -n dupkey.name
+tpm2_policyduplicationselect -S session.dat  -N dst_n.name -L policyA_dupselect.dat  -n dupkey.name
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_auth.dat,policyA_dupselect.dat 
+tpm2_duplicate -C new_parent.ctx -c key.ctx -G null  -p "session:session.dat" -r dup.dup -s dup.seed
+
+### these dup* bits are what get encoded into 
+###  https://github.com/salrashid123/go-tpm-wrapping/blob/main/tpmwrappb/wrap.proto#L33
+cp dup.dup /tmp
+cp dup.seed /tmp/
+cp dup.pub /tmp/
+```
 
 - `TPM-B` load the key and unseal
 
@@ -631,7 +691,8 @@ tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 tpm2 startauthsession --session session.ctx --policy-session
 tpm2 policysecret --session session.ctx --object-context endorsement
 
-tpm2_import -C /tmp/primaryB.ctx -u /tmp/dup.pub -i /tmp/dup.dup -r dup.prv -s /tmp/dup.seed --parent-auth session:session.ctx
+tpm2_import -C /tmp/primaryB.ctx -u /tmp/dup.pub -i /tmp/dup.dup -r dup.prv \
+   -s /tmp/dup.seed --parent-auth session:session.ctx
 
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 tpm2 startauthsession --session session.ctx --policy-session
@@ -642,10 +703,8 @@ tpm2_print -t TPM2B_PUBLIC /tmp/dup.pub
 
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
 
-tpm2_pcrread -o pcr23_valA.bin "sha256:23" 
-xxd -c 100 -p pcr23_valA.bin
 tpm2_startauthsession --policy-session  -S session.dat
-tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
+tpm2_policyauthvalue -S session.dat -L policyA_auth.dat 
 tpm2_flushcontext session.dat
 
 tpm2_startauthsession --policy-session  -S session.dat
@@ -653,8 +712,8 @@ tpm2_policyduplicationselect -S session.dat  -N /tmp/ekpubBname.bin -L policyA_d
 tpm2_flushcontext session.dat
 
 tpm2_startauthsession --policy-session -S session.dat
-tpm2_policypcr -S session.dat -l "sha256:23" -f pcr23_valA.bin -L policyA_pcr.dat 
-tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_pcr.dat,policyA_dupselect.dat 
+tpm2_policyauthvalue -S session.dat -L policyA_auth.dat 
+tpm2_policyor -S session.dat -L policyA_or.dat sha256:policyA_auth.dat,policyA_dupselect.dat 
 
 tpm2_unseal -o unseal.dat -c imported_key.ctx -p "session:session.dat+foo" 
 tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
@@ -717,17 +776,19 @@ If you want to test locally with software TPMs:
 ```bash
 ### start the
 
-## TPM-B
+## Initialize TPM-A
+rm -rf /tmp/myvtpm && mkdir /tmp/myvtpm
+swtpm_setup --tpmstate /tmp/myvtpm --tpm2 --create-ek-cert
+swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear
+
+## Initialize TPM-B
 rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2
 swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert
 swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear
 
-## for import create ek on TPM-B
-export TPM2TOOLS_TCTI="swtpm:port=2341"
-export TPM2OPENSSL_TCTI="swtpm:port=2341"
-tpm2_pcrread sha256:0,23
+### for TPM-A
+export TPM2TOOLS_TCTI="swtpm:port=2321"
 
-tpm2_createek -c /tmp/primaryB.ctx -G rsa  -Q
-tpm2_readpublic -c /tmp/primaryB.ctx -o /tmp/ekpubB.pem -n /tmp/ekpubBname.bin -f PEM -Q
-tpm2_flushcontext -t && tpm2_flushcontext -s && tpm2_flushcontext -l
+### for TPM-B
+export TPM2TOOLS_TCTI="swtpm:port=2341"
 ```
