@@ -19,8 +19,7 @@ jobs:
 
       - name: run swtpmB
         run: |
-          mkdir /tmp/myvtpm2 && swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert && swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear &
-
+          mkdir /tmp/myvtpm2 && /usr/share/swtpm/swtpm-create-user-config-files && swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert && swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear &
       - name: Check out code
         uses: actions/checkout@v4
 
