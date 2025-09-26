@@ -7,9 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"net"
 	"testing"
 
-	"github.com/google/go-tpm-tools/simulator"
 	tpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
@@ -17,8 +17,13 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+const (
+	swTPMPathB = "127.0.0.1:2341"
+)
+
 func TestSeal(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -55,7 +60,8 @@ func TestSeal(t *testing.T) {
 }
 
 func TestSealPCR(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -88,7 +94,8 @@ func TestSealPCR(t *testing.T) {
 }
 
 func TestSealPCRFail(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -151,7 +158,8 @@ func TestSealPCRFail(t *testing.T) {
 }
 
 func TestSealPassword(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -184,7 +192,8 @@ func TestSealPassword(t *testing.T) {
 }
 
 func TestSealPasswordFail(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -217,7 +226,8 @@ func TestSealPasswordFail(t *testing.T) {
 }
 
 func TestSealEncryptedSessionPassword(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
