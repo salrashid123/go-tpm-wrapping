@@ -133,18 +133,7 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		s.encryptedSessionName = opts.withSessionEncryptionName
 	}
 
-	switch {
-	case os.Getenv(EnvParentKeyH2) != "" && !opts.Options.WithDisallowEnvVars:
-		v := os.Getenv(EnvParentKeyH2)
-		if v == "true" {
-			s.parentKeyH2 = true
-		}
-	case opts.withParentKeyH2 != "":
-		if opts.withParentKeyH2 == "true" {
-			s.parentKeyH2 = true
-		}
-	}
-
+	s.parentKeyH2 = opts.withParentKeyH2
 	s.debug = opts.withDebug
 
 	// Map that holds non-sensitive configuration info to return
@@ -156,9 +145,6 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
 	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
 	wrapConfig.Metadata[KEY_NAME] = s.keyName
-	if s.parentKeyH2 {
-		wrapConfig.Metadata[PARENT_KEY_H2] = "true"
-	}
 	wrapConfig.Metadata[SESSION_ENCRYPTION_NAME] = s.encryptedSessionName
 	return wrapConfig, nil
 }

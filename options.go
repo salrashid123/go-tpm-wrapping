@@ -55,8 +55,6 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 				opts.withHierarchyAuth = v
 			case KEY_NAME:
 				opts.withKeyName = v
-			case PARENT_KEY_H2:
-				opts.withParentKeyH2 = v
 			case ENCRYPTING_PUBLIC_KEY:
 				opts.withEncryptingPublicKey = v
 			case SESSION_ENCRYPTION_NAME:
@@ -93,7 +91,7 @@ type options struct {
 	withKeyName               string
 	withEncryptingPublicKey   string
 	withSessionEncryptionName string
-	withParentKeyH2           string
+	withParentKeyH2           bool
 	withDebug                 bool
 }
 
@@ -195,7 +193,7 @@ func WithSessionEncryptionName(with string) wrapping.Option {
 func WithParentKeyH2(with bool) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
-			o.withParentKeyH2 = "true"
+			o.withParentKeyH2 = with
 			return nil
 		})
 	}
