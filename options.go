@@ -91,6 +91,7 @@ type options struct {
 	withKeyName               string
 	withEncryptingPublicKey   string
 	withSessionEncryptionName string
+	withParentKeyH2           string
 	withDebug                 bool
 }
 
@@ -184,6 +185,15 @@ func WithSessionEncryptionName(with string) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withSessionEncryptionName = with
+			return nil
+		})
+	}
+}
+
+func WithParentKeyH2(with bool) wrapping.Option {
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			o.withParentKeyH2 = "true"
 			return nil
 		})
 	}

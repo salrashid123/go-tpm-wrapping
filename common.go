@@ -28,6 +28,7 @@ const (
 	EnvEncryptingPublicKey = "TPM_ENCRYPTING_PUBLIC_KEY"
 	EnvUserAuth            = "TPM_USER_AUTH"
 	EnvHierarchyAuth       = "TPM_HIERARCHY_AUTH"
+	EnvParentKeyH2         = "TPM_PARENT_KEY_H2"
 
 	EnvKeyName               = "TPM_KEY_NAME"
 	EnvDEBUG                 = "TPM_DEBUG"

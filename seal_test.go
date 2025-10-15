@@ -68,7 +68,7 @@ func TestSealPCR(t *testing.T) {
 	ctx := context.Background()
 
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("15:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -102,7 +102,7 @@ func TestSealPCRFail(t *testing.T) {
 	ctx := context.Background()
 
 	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("23:0000000000000000000000000000000000000000000000000000000000000000"))
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithPCRValues("15:0000000000000000000000000000000000000000000000000000000000000000"))
 	require.NoError(t, err)
 
 	dataToSeal := []byte("foo")
@@ -123,7 +123,7 @@ func TestSealPCRFail(t *testing.T) {
 
 	rwr := transport.FromReadWriter(tpmDevice)
 
-	pcr := uint(23)
+	pcr := uint(15)
 
 	pcrReadRsp, err := tpm2.PCRRead{
 		PCRSelectionIn: tpm2.TPMLPCRSelection{

@@ -34,6 +34,8 @@ import (
 
 const (
 	WrapperTypeRemoteTPM wrapping.WrapperType = "tpmimport"
+	H2Parent                                  = "H2"
+	EKParent                                  = "EK"
 )
 
 // Configures and manages the TPM SRK encryption wrapper
@@ -50,6 +52,7 @@ type RemoteWrapper struct {
 	encryptingPublicKey  string
 	encryptedSessionName string
 	keyName              string
+	parentKeyH2          bool
 	debug                bool
 }
 
@@ -128,6 +131,18 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		s.encryptedSessionName = os.Getenv(EnvSessionEncryptionName)
 	case opts.withSessionEncryptionName != "":
 		s.encryptedSessionName = opts.withSessionEncryptionName
+	}
+
+	switch {
+	case os.Getenv(EnvParentKeyH2) != "" && !opts.Options.WithDisallowEnvVars:
+		v := os.Getenv(EnvParentKeyH2)
+		if v == "true" {
+			s.parentKeyH2 = true
+		}
+	case opts.withParentKeyH2 != "":
+		if opts.withParentKeyH2 == "true" {
+			s.parentKeyH2 = true
+		}
 	}
 
 	s.debug = opts.withDebug
@@ -212,8 +227,14 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		if !ok {
 			return nil, fmt.Errorf(" error converting encryptingPublicKey to ecdsa")
 		}
-		parentKeyType = tpmwrappb.DuplicatedKey_EndorsementECC
-		ekPububFromPEMTemplate = tpm2.ECCEKTemplate
+		if s.parentKeyH2 {
+			parentKeyType = tpmwrappb.DuplicatedKey_H2
+			ekPububFromPEMTemplate = keyfile.ECCSRK_H2_Template
+		} else {
+			parentKeyType = tpmwrappb.DuplicatedKey_EndorsementECC
+			ekPububFromPEMTemplate = tpm2.ECCEKTemplate
+		}
+
 		ekPububFromPEMTemplate.Unique = tpm2.NewTPMUPublicID(
 			tpm2.TPMAlgECC,
 			&tpm2.TPMSECCPoint{
@@ -853,6 +874,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
 			}
 			pubAlg = tpm2.New2B(tpm2.RSAEKTemplate)
+
 		case *ecdsa.PublicKey:
 			ecPubPK, ok := parsedK.(*ecdsa.PublicKey)
 			if !ok {
@@ -865,7 +887,13 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			if !ecPubP.Equal(ecPubPK) {
 				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
 			}
-			pubAlg = tpm2.New2B(tpm2.ECCEKTemplate)
+
+			if s.parentKeyH2 {
+				pubAlg = tpm2.New2B(keyfile.ECCSRK_H2_Template)
+			} else {
+				pubAlg = tpm2.New2B(tpm2.ECCEKTemplate)
+			}
+
 		default:
 			return nil, fmt.Errorf("unsupported public key type %v", pub)
 		}
@@ -895,17 +923,30 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	case TPMImport:
 
 		// create the EK (this is the default parent key we exported to the remote TPM)
-		cPrimary, err := tpm2.CreatePrimary{
-			PrimaryHandle: tpm2.AuthHandle{
-				Handle: tpm2.TPMRHEndorsement,
-				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
-				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
-			},
-			InPublic: pubAlg,
-		}.Execute(rwr, rsessInOut)
-		if err != nil {
-			return nil, fmt.Errorf("can't create primary TPM %v", err)
+
+		var cPrimary *tpm2.CreatePrimaryResponse
+		if s.parentKeyH2 {
+			cPrimary, err = tpm2.CreatePrimary{
+				PrimaryHandle: tpm2.TPMRHOwner,
+				InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+			}.Execute(rwr)
+			if err != nil {
+				return nil, fmt.Errorf("can't create primary TPM %v", err)
+			}
+		} else {
+			cPrimary, err = tpm2.CreatePrimary{
+				PrimaryHandle: tpm2.AuthHandle{
+					Handle: tpm2.TPMRHEndorsement,
+					Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+					Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+				},
+				InPublic: pubAlg,
+			}.Execute(rwr, rsessInOut)
+			if err != nil {
+				return nil, fmt.Errorf("can't create primary TPM %v", err)
+			}
 		}
+
 		defer func() {
 			flush := tpm2.FlushContext{
 				FlushHandle: cPrimary.ObjectHandle,
@@ -913,82 +954,115 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			_, _ = flush.Execute(rwr)
 		}()
 
-		// first create a session on the TPM which will allow use of the EK.
-		//  using EK here needs PolicySecret
-		import_sess, import_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
-		if err != nil {
-			return nil, fmt.Errorf("setting up trial session: %v", err)
-		}
-		defer import_session_cleanup()
+		var importResp *tpm2.ImportResponse
+		if !s.parentKeyH2 {
+			// first create a session on the TPM which will allow use of the EK.
+			//  using EK here needs PolicySecret
+			import_sess, import_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
+			if err != nil {
+				return nil, fmt.Errorf("setting up trial session: %v", err)
+			}
+			defer import_session_cleanup()
+			_, err = tpm2.PolicySecret{
+				AuthHandle: tpm2.AuthHandle{
+					Handle: tpm2.TPMRHEndorsement,
+					Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+					Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+				},
+				PolicySession: import_sess.Handle(),
+				NonceTPM:      import_sess.NonceTPM(),
+			}.Execute(rwr, rsessInOut)
+			if err != nil {
+				return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
+			}
 
-		_, err = tpm2.PolicySecret{
-			AuthHandle: tpm2.AuthHandle{
-				Handle: tpm2.TPMRHEndorsement,
-				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
-				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
-			},
-			PolicySession: import_sess.Handle(),
-			NonceTPM:      import_sess.NonceTPM(),
-		}.Execute(rwr, rsessInOut)
-		if err != nil {
-			return nil, fmt.Errorf("error setting policy PolicyDuplicationSelect %v", err)
+			// now import the duplicated key
+			importResp, err = tpm2.Import{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: cPrimary.ObjectHandle,
+					Name:   cPrimary.Name,
+					Auth:   import_sess,
+				},
+				ObjectPublic: kf.Pubkey, //tpm2.New2B(*dupPub),
+				Duplicate: tpm2.TPM2BPrivate{
+					Buffer: kf.Privkey.Buffer,
+				},
+				InSymSeed: tpm2.TPM2BEncryptedSecret{
+					Buffer: kf.Secret.Buffer,
+				},
+			}.Execute(rwr, rsessInOut)
+			if err != nil {
+				return nil, fmt.Errorf("can't run import dup %v", err)
+			}
+
+			err = import_session_cleanup()
+			if err != nil {
+				return nil, fmt.Errorf("can't run flush session %v", err)
+			}
+		} else {
+			// now import the duplicated key
+			importResp, err = tpm2.Import{
+				ParentHandle: tpm2.NamedHandle{
+					Handle: cPrimary.ObjectHandle,
+					Name:   cPrimary.Name,
+				},
+				ObjectPublic: kf.Pubkey, //tpm2.New2B(*dupPub),
+				Duplicate: tpm2.TPM2BPrivate{
+					Buffer: kf.Privkey.Buffer,
+				},
+				InSymSeed: tpm2.TPM2BEncryptedSecret{
+					Buffer: kf.Secret.Buffer,
+				},
+			}.Execute(rwr, rsessInOut)
+			if err != nil {
+				return nil, fmt.Errorf("can't run import dup %v", err)
+			}
 		}
 
-		// now import the duplicated key
-		importResp, err := tpm2.Import{
-			ParentHandle: tpm2.AuthHandle{
-				Handle: cPrimary.ObjectHandle,
-				Name:   cPrimary.Name,
-				Auth:   import_sess,
-			},
-			ObjectPublic: kf.Pubkey, //tpm2.New2B(*dupPub),
-			Duplicate: tpm2.TPM2BPrivate{
-				Buffer: kf.Privkey.Buffer,
-			},
-			InSymSeed: tpm2.TPM2BEncryptedSecret{
-				Buffer: kf.Secret.Buffer,
-			},
-		}.Execute(rwr, rsessInOut)
-		if err != nil {
-			return nil, fmt.Errorf("can't run import dup %v", err)
-		}
-
-		err = import_session_cleanup()
-		if err != nil {
-			return nil, fmt.Errorf("can't run flush session %v", err)
-		}
-
-		// create a new session to load
-		load_session, load_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
-		if err != nil {
-			return nil, fmt.Errorf("setting up trial session: %v", err)
-		}
-		defer load_session_cleanup()
-
-		_, err = tpm2.PolicySecret{
-			AuthHandle: tpm2.AuthHandle{
-				Handle: tpm2.TPMRHEndorsement,
-				Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
-				Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
-			},
-			PolicySession: load_session.Handle(),
-			NonceTPM:      load_session.NonceTPM(),
-		}.Execute(rwr)
-		if err != nil {
-			return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
-		}
-
-		loadkRsp, err := tpm2.Load{
-			ParentHandle: tpm2.AuthHandle{
-				Handle: cPrimary.ObjectHandle,
-				Name:   cPrimary.Name,
-				Auth:   load_session,
-			},
-			InPrivate: importResp.OutPrivate,
-			InPublic:  tpm2.New2B(*dupPub),
-		}.Execute(rwr)
-		if err != nil {
-			return nil, fmt.Errorf("can't load object %v", err)
+		var loadkRsp *tpm2.LoadResponse
+		if !s.parentKeyH2 {
+			// create a new session to load
+			load_session, load_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
+			if err != nil {
+				return nil, fmt.Errorf("setting up trial session: %v", err)
+			}
+			defer load_session_cleanup()
+			_, err = tpm2.PolicySecret{
+				AuthHandle: tpm2.AuthHandle{
+					Handle: tpm2.TPMRHEndorsement,
+					Name:   tpm2.HandleName(tpm2.TPMRHEndorsement),
+					Auth:   tpm2.PasswordAuth([]byte(s.hierarchyAuth)),
+				},
+				PolicySession: load_session.Handle(),
+				NonceTPM:      load_session.NonceTPM(),
+			}.Execute(rwr)
+			if err != nil {
+				return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
+			}
+			loadkRsp, err = tpm2.Load{
+				ParentHandle: tpm2.AuthHandle{
+					Handle: cPrimary.ObjectHandle,
+					Name:   cPrimary.Name,
+					Auth:   load_session,
+				},
+				InPrivate: importResp.OutPrivate,
+				InPublic:  tpm2.New2B(*dupPub),
+			}.Execute(rwr)
+			if err != nil {
+				return nil, fmt.Errorf("can't load object %v", err)
+			}
+		} else {
+			loadkRsp, err = tpm2.Load{
+				ParentHandle: tpm2.NamedHandle{
+					Handle: cPrimary.ObjectHandle,
+					Name:   cPrimary.Name,
+				},
+				InPrivate: importResp.OutPrivate,
+				InPublic:  tpm2.New2B(*dupPub),
+			}.Execute(rwr)
+			if err != nil {
+				return nil, fmt.Errorf("can't load object %v", err)
+			}
 		}
 
 		defer func() {

@@ -9,9 +9,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"testing"
 
-	"github.com/google/go-tpm-tools/simulator"
+	keyfile "github.com/foxboron/go-tpm-keyfiles"
 	tpm2 "github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
@@ -32,7 +33,9 @@ wwIDAQAB
 )
 
 func TestImportRSA(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -108,8 +111,94 @@ func TestImportRSA(t *testing.T) {
 	require.Equal(t, dataToSeal, plaintext)
 }
 
+func TestImportH2(t *testing.T) {
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	ecDetail, err := outPub.Parameters.ECCDetail()
+	require.NoError(t, err)
+
+	crv, err := ecDetail.CurveID.Curve()
+	require.NoError(t, err)
+
+	eccUnique, err := outPub.Unique.ECC()
+	require.NoError(t, err)
+
+	pubKey := &ecdsa.PublicKey{
+		Curve: crv,
+		X:     big.NewInt(0).SetBytes(eccUnique.X.Buffer),
+		Y:     big.NewInt(0).SetBytes(eccUnique.Y.Buffer),
+	}
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(pubKey)
+	require.NoError(t, err)
+	pemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+
+	ctx := context.Background()
+
+	keyName := "bar"
+
+	wrapper := NewRemoteWrapper()
+	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName), WithParentKeyH2(true))
+	require.NoError(t, err)
+
+	dataToSeal := []byte("foo")
+
+	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	require.NoError(t, err)
+
+	b, err := protojson.Marshal(blobInfo)
+	require.NoError(t, err)
+
+	var prettyJSON bytes.Buffer
+	err = json.Indent(&prettyJSON, b, "", "\t")
+	require.NoError(t, err)
+
+	newBlobInfo := &wrapping.BlobInfo{}
+	err = protojson.Unmarshal(b, newBlobInfo)
+	require.NoError(t, err)
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	require.NoError(t, err)
+
+	require.Equal(t, keyName, newBlobInfo.KeyInfo.KeyId)
+
+	require.Equal(t, dataToSeal, plaintext)
+}
+
 func TestImportECC(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -192,7 +281,8 @@ func TestImportECC(t *testing.T) {
 }
 
 func TestImportPCR(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -265,7 +355,8 @@ func TestImportPCR(t *testing.T) {
 }
 
 func TestImportPCRFail(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -364,7 +455,8 @@ func TestImportPCRFail(t *testing.T) {
 }
 
 func TestImportEKFail(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -438,7 +530,8 @@ func TestImportEKFail(t *testing.T) {
 }
 
 func TestImportPassword(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 
@@ -516,7 +609,8 @@ func TestImportPassword(t *testing.T) {
 }
 
 func TestImportPasswordFail(t *testing.T) {
-	tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
 	require.NoError(t, err)
 	defer tpmDevice.Close()
 

@@ -559,20 +559,20 @@ to `Decrypt`:
 
 #### `Import`
 
-   For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.
+   For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.  YOu do not need a TPM on your laptop but you do need one on the destination (ofcourse)
    
 **A**: To transfer a secret from your local laptop to `TPM-B` with **userAuth** or **PCRPolicy**
 
    1. `TPM-B`: create `ekpubB.pem`
    2.  copy `ekpubB.pem` to `TPM-A`
 
-on `TPM-A`:
+on `laptop`:
 
    3. given plaintext, use [go-kms-wrapping.Encrypt()](https://pkg.go.dev/github.com/hashicorp/go-kms-wrapping#Envelope.Encrypt) to encrypt.
       This will return a new _inner encryption key_ (`env.Key`), initialization vector and cipher text
    4. construct a TPM Public of type `tpm2.TPMAlgKeyedHash`  with `PolicyOr[PolicyAuthValue|PolicyDuplicateSelect]` or as `PolicyOr[PolicyPCR|PolicyDuplicateSelect]`.
    5. set the `env.Key` as the TPM keys sensitive part (i.,e seal data)
-   6. duplicate the TPM based key using the `Policyduplicateselect` and a real session
+   6. duplicate the key using the `Policyduplicateselect`
 
    ```text
    env.key, ciphertext1, iv1: = go-kms-wrapping.Encrypt(plaintext1) 
@@ -601,6 +601,7 @@ Note, this utility does not require a TPM on the system where you are transferri
 - Initialize
 
 ```bash
+
 ## Initialize TPM-A
 rm -rf /tmp/myvtpm && mkdir /tmp/myvtpm
 swtpm_setup --tpmstate /tmp/myvtpm --tpm2 --create-ek-cert
@@ -758,8 +759,6 @@ wget https://github.com/salrashid123/go-tpm-wrapping/releases/download/v0.7.5/go
 
 gpg --verify go-tpm-wrapping_0.7.5_linux_amd64.sig go-tpm-wrapping_0.7.5_linux_amd64
 ```
-
-#### Seal/Import with non-EKPub
 
 _TODO_
 
