@@ -39,6 +39,7 @@ const (
 	USER_AUTH               = "user_auth"
 	HIERARCHY_AUTH          = "hierarchy_auth"
 	KEY_NAME                = "key_name"
+	PARENT_KEY_H2           = "parent_key_h2"
 	ENCRYPTING_PUBLIC_KEY   = "encrypting_public_key"
 	SESSION_ENCRYPTION_NAME = "session_encryption_name"
 

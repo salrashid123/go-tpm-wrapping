@@ -29,7 +29,7 @@ var (
 	keyPass       = flag.String("keyPass", "", "TPM Key password")
 	hierarchyPass = flag.String("hierarchyPass", "", "TPM owner Key password")
 	keyName       = flag.String("keyName", "key1", "KeyName")
-
+	parentKeyH2   = flag.Bool("parentKeyH2", false, "is the parent key using h2 template")
 	pcrValues     = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
 	dataToEncrypt = flag.String("dataToEncrypt", "", "data to encrypt")
 
@@ -119,6 +119,11 @@ func main() {
 
 		} else {
 
+			parentH2 := "false"
+			if *parentKeyH2 {
+				parentH2 = "true"
+			}
+
 			wrapper := tpmwrap.NewWrapper()
 			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
 				tpmwrap.TPM_PATH:                *tpmPath,
@@ -126,6 +131,7 @@ func main() {
 				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
 				tpmwrap.PCR_VALUES:              *pcrValues,
 				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
+				tpmwrap.PARENT_KEY_H2:           parentH2,
 			}))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)

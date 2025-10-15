@@ -156,6 +156,9 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	wrapConfig.Metadata[USER_AUTH] = s.userAuth
 	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
 	wrapConfig.Metadata[KEY_NAME] = s.keyName
+	if s.parentKeyH2 {
+		wrapConfig.Metadata[PARENT_KEY_H2] = "true"
+	}
 	wrapConfig.Metadata[SESSION_ENCRYPTION_NAME] = s.encryptedSessionName
 	return wrapConfig, nil
 }

@@ -55,6 +55,8 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 				opts.withHierarchyAuth = v
 			case KEY_NAME:
 				opts.withKeyName = v
+			case PARENT_KEY_H2:
+				opts.withParentKeyH2 = v
 			case ENCRYPTING_PUBLIC_KEY:
 				opts.withEncryptingPublicKey = v
 			case SESSION_ENCRYPTION_NAME:
