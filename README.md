@@ -90,22 +90,22 @@ The following uses a software TPM (`swtpm`) which you can configure with the ins
 - **encrypt/decrypt**
 
 ```bash
-$ go-tpm-wrapping --mode=seal  \
+go-tpm-wrapping --mode=seal  \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"
 
-$ go-tpm-wrapping --mode=seal  --decrypt \
+go-tpm-wrapping --mode=seal  --decrypt \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2341"
 ```
 
 - **encrypt/decrypt with passphrase**
 
 ```bash
-$ go-tpm-wrapping --mode=seal  \
+go-tpm-wrapping --mode=seal  \
    --dataToEncrypt=foo  --keyPass=testpass --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"
 
-$ go-tpm-wrapping --mode=seal --keyPass=testpass --decrypt \
+go-tpm-wrapping --mode=seal --keyPass=testpass --decrypt \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2341"
 ```
 
@@ -207,7 +207,7 @@ The following uses a local software TPM to generate and encrypt the transfer key
 
 ```bash
 # encrypt
-$ go-tpm-wrapping --mode=import   \
+go-tpm-wrapping --mode=import   \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json 
 ```
@@ -216,7 +216,7 @@ $ go-tpm-wrapping --mode=import   \
 
 ```bash
 # decrypt
-$ go-tpm-wrapping --mode=import  --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
+go-tpm-wrapping --mode=import  --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
     --encryptedBlob=/tmp/encrypted.json \
     --tpm-path="127.0.0.1:2341" 
 ```
@@ -235,7 +235,7 @@ Then on a machine with the TPM, run
 ```bash
 # decrypt
 $ go-tpm-wrapping --mode=import  --decrypt \
-    --encryptedBlob=/tmp/encrypted.json --keyPass=bar \
+    --encryptedBlob=/tmp/encrypted.json --encrypting_public_key=/tmp/ekpubB.pem --keyPass=bar \
     --tpm-path="127.0.0.1:2341" 
 ```
 
@@ -245,7 +245,6 @@ $ go-tpm-wrapping --mode=import  --decrypt \
 ## encrypt/decrypt and bind the data to the **destination TPM's** values in
 ### If you want the TPM where you want to decrypt to have the following PCR values
 export TPM2TOOLS_TCTI="swtpm:port=2341"
-export TPM2OPENSSL_TCTI="swtpm:port=2341"
 $ tpm2_pcrread sha256:0,23
   sha256:
     0 : 0x0000000000000000000000000000000000000000000000000000000000000000
@@ -321,6 +320,8 @@ go-tpm-wrapping --mode=import --hierarchyPass=newpass2 --decrypt --encrypting_pu
     --tpm-path="127.0.0.1:2341" 
 ```
 
+>> note that during decryption/import, you can omit `--encrypting_public_key=` parameter. Doing so will use the ekPublic key embedded in the proto itself.   If you specify the parameter during decryption, the value is compared to what is in the proto and will fail if different (which means the key to encrypt isn't the same one as you specified in the cli)
+
 ### Usage API
 
 If you want to use the api instead of the CLI, see the `example/` folder
@@ -336,13 +337,8 @@ import (
 )
 
 	wrapper := tpmwrap.NewWrapper()
-	// you can also use options: wrapper.SetConfig(ctx, WithTPM(*tpmPath))
-	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:   *tpmPath,
-		// tpmwrap.PCR_VALUES: *pcrValues,
-		// tpmwrap.USER_AUTH:  *userAuth,
-	}))
 
+	_, err := wrapping.SetConfig(ctx, WithTPM(*tpmPath))
 
 	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 
@@ -354,10 +350,7 @@ Decrypt:
 ```golang
 	wrapper := tpmwrap.NewWrapper()
 
-	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:   *tpmPath,
-		// tpmwrap.USER_AUTH:  *userAuth,
-	}))
+	_, err := wrapping.SetConfig(ctx, WithTPM(*tpmPath))
 
 	b, err := os.ReadFile(*encryptedBlob)
 
@@ -372,18 +365,18 @@ Decrypt:
 ```bash
 # no auth
 ## encrypt/decrypt
-$ go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
   --tpm-path="127.0.0.1:2341"
 
-$ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
   --tpm-path="127.0.0.1:2341"
 
-# password and pcr
-$ go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
-   --userAuth=abc --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000 \
+# with password
+go run seal_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
+   --userAuth=abc \
     --tpm-path="127.0.0.1:2341"
 
-$ go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
+go run seal_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
    --userAuth=abc  \
     --tpm-path="127.0.0.1:2341"
 ```
@@ -401,12 +394,7 @@ import (
 
 	wrapper := tpmwrap.NewRemoteWrapper()
 
-	// you can also use options: wrapper.SetConfig(ctx, WithEncryptingPublicKey(hex.EncodeToString(b)))
-	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		// tpmwrap.PCR_VALUES:            *pcrValues,
-		// tpmwrap.USER_AUTH:             *userAuth,
-	}))
+	_, err = wrapper.SetConfig(ctx, WithEncryptingPublicKey(hex.EncodeToString(b)))
 
 	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 
@@ -462,6 +450,7 @@ go run import_encrypt/main.go --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted
 
 go run import_decrypt/main.go --encryptedBlob=/tmp/encrypted.json \
    --encrypting_public_key=/tmp/ekpubB.pem \
+   --pcrValues=23:0000000000000000000000000000000000000000000000000000000000000000  \
    --tpm-path="127.0.0.1:2341"   
 ```
 
@@ -775,18 +764,10 @@ If you want to test locally with software TPMs:
 ```bash
 ### start the
 
-## Initialize TPM-A
-rm -rf /tmp/myvtpm && mkdir /tmp/myvtpm
-swtpm_setup --tpmstate /tmp/myvtpm --tpm2 --create-ek-cert
-swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear
-
 ## Initialize TPM-B
-rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2
-swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert
-swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear
-
-### for TPM-A
-export TPM2TOOLS_TCTI="swtpm:port=2321"
+rm -rf /tmp/myvtpm2 && mkdir /tmp/myvtpm2 && \
+swtpm_setup --tpmstate /tmp/myvtpm2 --tpm2 --create-ek-cert && \
+swtpm socket --tpmstate dir=/tmp/myvtpm2 --tpm2 --server type=tcp,port=2341 --ctrl type=tcp,port=2342 --flags not-need-init,startup-clear --log level=2
 
 ### for TPM-B
 export TPM2TOOLS_TCTI="swtpm:port=2341"

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 
-	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -17,7 +16,6 @@ import (
 const ()
 
 var (
-	tpmPath               = flag.String("tpm-path", "/dev/tpm0", "Path to the TPM device (character device or a Unix socket).")
 	dataToEncrypt         = flag.String("dataToEncrypt", "foo", "data to encrypt")
 	pcrValues             = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
 	userAuth              = flag.String("userAuth", "", "object Password")
@@ -37,16 +35,16 @@ func main() {
 	}
 
 	wrapper := tpmwrap.NewRemoteWrapper()
-	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:              *tpmPath,
-		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		tpmwrap.PCR_VALUES:            *pcrValues,
-		tpmwrap.USER_AUTH:             *userAuth,
-	}))
+
+	_, err = wrapper.SetConfig(ctx,
+		tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(b)),
+		tpmwrap.WithPCRValues(*pcrValues),
+		tpmwrap.WithUserAuth(*userAuth))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 		os.Exit(1)
 	}
+
 	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)

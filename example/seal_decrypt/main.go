@@ -4,13 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
-	"net"
 	"os"
-	"slices"
 
-	"github.com/google/go-tpm-tools/simulator"
-	"github.com/google/go-tpm/tpmutil"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,6 +16,7 @@ const ()
 var (
 	tpmPath       = flag.String("tpm-path", "/dev/tpm0", "Path to the TPM device (character device or a Unix socket).")
 	userAuth      = flag.String("userAuth", "", "object Password")
+	pcrValues     = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
 	encryptedBlob = flag.String("encryptedBlob", "encrypted.json", "Encrypted Blob")
 )
 
@@ -29,28 +25,17 @@ const (
 	TPMImport
 )
 
-var TPMDEVICES = []string{"/dev/tpm0", "/dev/tpmrm0"}
-
-func openTPM(path string) (io.ReadWriteCloser, error) {
-	if slices.Contains(TPMDEVICES, path) {
-		return tpmutil.OpenTPM(path)
-	} else if path == "simulator" {
-		return simulator.GetWithFixedSeedInsecure(1073741825)
-	} else {
-		return net.Dial("tcp", path)
-	}
-}
-
 func main() {
 	flag.Parse()
 
 	ctx := context.Background()
 
 	wrapper := tpmwrap.NewWrapper()
-	_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:  *tpmPath,
-		tpmwrap.USER_AUTH: *userAuth,
-	}))
+	_, err := wrapper.SetConfig(ctx,
+		tpmwrap.WithTPMPath(*tpmPath),
+		tpmwrap.WithPCRValues(*pcrValues),
+		tpmwrap.WithUserAuth(*userAuth))
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 		os.Exit(1)

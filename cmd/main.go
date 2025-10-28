@@ -75,14 +75,12 @@ func main() {
 	case "seal":
 		if !*decrypt {
 			wrapper := tpmwrap.NewWrapper()
-			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:                *tpmPath,
-				tpmwrap.USER_AUTH:               *keyPass,
-				tpmwrap.PCR_VALUES:              *pcrValues,
-				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
-				tpmwrap.KEY_NAME:                *keyName,
-				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
-			}))
+
+			_, err := wrapper.SetConfig(ctx,
+				tpmwrap.WithTPMPath(*tpmPath),
+				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithKeyName(*keyName),
+				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
@@ -119,20 +117,13 @@ func main() {
 
 		} else {
 
-			parentH2 := "false"
-			if *parentKeyH2 {
-				parentH2 = "true"
-			}
-
 			wrapper := tpmwrap.NewWrapper()
-			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:                *tpmPath,
-				tpmwrap.USER_AUTH:               *keyPass,
-				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
-				tpmwrap.PCR_VALUES:              *pcrValues,
-				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
-				tpmwrap.PARENT_KEY_H2:           parentH2,
-			}))
+
+			_, err := wrapper.SetConfig(ctx,
+				tpmwrap.WithTPMPath(*tpmPath),
+				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithParentKeyH2(*parentKeyH2),
+				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
@@ -171,13 +162,11 @@ func main() {
 			}
 
 			wrapper := tpmwrap.NewRemoteWrapper()
-			_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-				tpmwrap.USER_AUTH:             *keyPass,
-				tpmwrap.HIERARCHY_AUTH:        *hierarchyPass,
-				tpmwrap.PCR_VALUES:            *pcrValues,
-				tpmwrap.KEY_NAME:              *keyName,
-			}))
+
+			_, err = wrapper.SetConfig(ctx,
+				tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(b)),
+				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithKeyName(*keyName))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
@@ -230,14 +219,11 @@ func main() {
 			}
 
 			wrapper := tpmwrap.NewRemoteWrapper()
-			_, err := wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-				tpmwrap.TPM_PATH:                *tpmPath,
-				tpmwrap.ENCRYPTING_PUBLIC_KEY:   hex.EncodeToString(ekb),
-				tpmwrap.USER_AUTH:               *keyPass,
-				tpmwrap.HIERARCHY_AUTH:          *hierarchyPass,
-				tpmwrap.PCR_VALUES:              *pcrValues,
-				tpmwrap.SESSION_ENCRYPTION_NAME: *sessionEncryptionName,
-			}))
+
+			_, err := wrapper.SetConfig(ctx,
+				tpmwrap.WithTPMPath(*tpmPath), tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(ekb)),
+				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)

@@ -17,6 +17,7 @@ const ()
 var (
 	tpmPath               = flag.String("tpm-path", "/dev/tpm0", "Path to the TPM device (character device or a Unix socket).")
 	userAuth              = flag.String("userAuth", "", "object Password")
+	pcrValues             = flag.String("pcrValues", "", "SHA256 PCR Values to seal against 16:abc,23:foo")
 	encrypting_public_key = flag.String("encrypting_public_key", "", "Public Key to encrypt with")
 	encryptedBlob         = flag.String("encryptedBlob", "encrypted.json", "Encrypted Blob")
 )
@@ -33,11 +34,13 @@ func main() {
 	}
 
 	wrapper := tpmwrap.NewRemoteWrapper()
-	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:              *tpmPath,
-		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		tpmwrap.USER_AUTH:             *userAuth,
-	}))
+
+	_, err = wrapper.SetConfig(ctx,
+		tpmwrap.WithTPMPath(*tpmPath),
+		tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(b)),
+		tpmwrap.WithPCRValues(*pcrValues),
+		tpmwrap.WithUserAuth(*userAuth))
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 		os.Exit(1)

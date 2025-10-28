@@ -886,6 +886,32 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		default:
 			return nil, fmt.Errorf("unsupported public key type %v", pub)
 		}
+	} else {
+
+		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.Ekpub))
+		if err != nil {
+			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+		}
+
+		blockK, _ := pem.Decode(ekPubDup)
+
+		parsedK, err := x509.ParsePKIXPublicKey(blockK.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf(" unable parsing encrypting public key from blob : %v", err)
+		}
+
+		switch pub := parsedK.(type) {
+		case *rsa.PublicKey:
+			pubAlg = tpm2.New2B(tpm2.RSAEKTemplate)
+		case *ecdsa.PublicKey:
+			if s.parentKeyH2 {
+				pubAlg = tpm2.New2B(keyfile.ECCSRK_H2_Template)
+			} else {
+				pubAlg = tpm2.New2B(tpm2.ECCEKTemplate)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported public key type %v", pub)
+		}
 	}
 
 	if s.userAuth != "" && len(wrappb.Pcrs) > 0 {
