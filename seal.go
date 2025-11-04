@@ -303,7 +303,7 @@ func (s *TPMWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapp
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM:     true,
 				FixedParent:  true,
-				UserWithAuth: true, // allow policy based auth
+				UserWithAuth: false,
 			},
 		}),
 		InSensitive: tpm2.TPM2BSensitiveCreate{
