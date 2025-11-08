@@ -6,13 +6,6 @@ In other words, you *must* have access to a specific TPM decrypt the wrapping ke
 
 In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase (`userAuth`) or if the target system has certain `PCR` values.
 
->> **Update 08/15/25**: `v1.9.0`: This release updates the encoded key format (eg, version=2)  If you want to use version=1, use a prior release.  These keyformats are not back compatible. The other significant change is that you dont' need a lcoal tpm to transfer the keys.
-
->> **Update 11/18/24**: `v0.7.0`:changed import protobuf to use seal/unseal
-
->> **Update 8/16/24**:  changed the key format to use protobuf
-
-
 There are two modes to using this library:
 
 * `Seal/Unseal` 
@@ -20,8 +13,6 @@ There are two modes to using this library:
   To use this, you must have access to the *same* TPM for both encrypting and decrypting.
 
   When you encrypt data, it can ONLY get decrypted by that *SAME* TPM.
-
-  see [Seal/Unseal using a TPM's Storage Root Key (SRK)](https://github.com/salrashid123/tpm2/tree/master/srk_seal_unseal)
 
 * `Remote encryption`
 
