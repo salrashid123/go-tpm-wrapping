@@ -1,10 +1,10 @@
 ## Go-TPM-Wrapping - Go library for encrypting data using Trusted Platform Module (TPM)
 
-Library to encrypt and decrypt data using a wrapping key thats encoded inside a `Trusted Platform Module (TPM)`.
+Library to encrypt and decrypt data using a wrapping key thats encoded using a `Trusted Platform Module (TPM)`.
 
 In other words, you *must* have access to a specific TPM decrypt the wrapping key.
 
-In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase (`userAuth`) or if the target system has certain `PCR` values.
+In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase or if the target system has certain `PCR` values.
 
 There are two modes to using this library:
 
@@ -18,7 +18,7 @@ There are two modes to using this library:
 
   This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the some data which can ONLY get decrypted by the TPM that owns the EKPub
 
-  This mode does not require access to a local TPM
+  This mode does not require access to a local TPM to encrypt data but does require access to the target TPM to decrypt.
 
 For a detailed description on how these modes work, see the [Background](#background) section at the end
 
