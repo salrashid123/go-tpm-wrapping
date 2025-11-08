@@ -212,7 +212,7 @@ go-tpm-wrapping --mode=import  --decrypt --encrypting_public_key=/tmp/ekpubB.pem
     --tpm-path="127.0.0.1:2341" 
 ```
 
-- **With userAuth**
+- **With passphrase**
 
 ```bash
 # encrypt
@@ -541,7 +541,7 @@ to `Decrypt`:
 
    For this,  you encrypt some data _remotely_ using just a public encryption key for the target TPM.  YOu do not need a TPM on your laptop but you do need one on the destination (ofcourse)
    
-**A**: To transfer a secret from your local laptop to `TPM-B` with **userAuth** or **PCRPolicy**
+**A**: To transfer a secret from your local laptop to `TPM-B` with **password** or **PCRPolicy**
 
    1. `TPM-B`: create `ekpubB.pem`
    2.  copy `ekpubB.pem` to `TPM-A`
