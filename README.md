@@ -399,11 +399,7 @@ At this point, copy `encrypted_blob` to the machine where you want to transfer a
 ```golang
 	wrapper := tpmwrap.NewRemoteWrapper()
 
-	_, err = wrapper.SetConfig(ctx, wrapping.WithConfigMap(map[string]string{
-		tpmwrap.TPM_PATH:              *tpmPath,
-		tpmwrap.ENCRYPTING_PUBLIC_KEY: hex.EncodeToString(b),
-		// tpmwrap.USER_AUTH:             *userAuth,
-	}))
+	_, err = wrapper.SetConfig(ctx, WithTPMPath(*tpmPath), WithEncryptingPublicKey(hex.EncodeToString(b)))
 
 	eb, err := os.ReadFile(*encryptedBlob)
 

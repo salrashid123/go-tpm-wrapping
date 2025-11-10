@@ -1,12 +1,14 @@
 package tpmwrap
 
 import (
+	"fmt"
 	"io"
 
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 )
 
-// getOpts iterates the inbound Options and returns a struct
+type Option func(*options)
+
 func getOpts(opt ...wrapping.Option) (*options, error) {
 	// First, separate out options into local and global
 	opts := getDefaultOptions()
@@ -36,31 +38,8 @@ func getOpts(opt ...wrapping.Option) (*options, error) {
 	if opts.Options == nil {
 		opts.Options = new(wrapping.Options)
 	}
-
-	// Local options can be provided either via the WithConfigMap field
-	// (for over the plugin barrier or embedding) or via local option functions
-	// (for embedding). First pull from the option.
 	if opts.WithConfigMap != nil {
-		for k, v := range opts.WithConfigMap {
-			switch k {
-			case "user_agent":
-				opts.withUserAgent = v
-			case TPM_PATH:
-				opts.withTPMPath = v
-			case PCR_VALUES:
-				opts.withPCRValues = v
-			case USER_AUTH:
-				opts.withUserAuth = v
-			case HIERARCHY_AUTH:
-				opts.withHierarchyAuth = v
-			case KEY_NAME:
-				opts.withKeyName = v
-			case ENCRYPTING_PUBLIC_KEY:
-				opts.withEncryptingPublicKey = v
-			case SESSION_ENCRYPTION_NAME:
-				opts.withSessionEncryptionName = v
-			}
-		}
+		return nil, fmt.Errorf("WithConfigMap not supported")
 	}
 
 	// Now run the local options functions. This may overwrite options set by

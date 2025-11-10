@@ -24,6 +24,8 @@ import (
 var (
 	mode = flag.String("mode", "seal", "operation mode: seal or import")
 
+	aad = flag.String("aad", "", "with additional data")
+
 	tpmPath = flag.String("tpm-path", "/dev/tpmrm0", "Path to the TPM device (character device or a Unix socket).")
 	//parentPass    = flag.String("parentPass", "", "TPM Parent Key password")
 	keyPass       = flag.String("keyPass", "", "TPM Key password")
@@ -86,7 +88,7 @@ func main() {
 				os.Exit(1)
 			}
 			wrapper.SetConfig(ctx, tpmwrap.WithDebug(*debug))
-			blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
+			blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt), wrapping.WithAad([]byte(*aad)))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)
 				os.Exit(1)
@@ -142,7 +144,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+			plaintext, err := wrapper.Decrypt(ctx, newBlobInfo, wrapping.WithAad([]byte(*aad)))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error decrypting %v\n", err)
 				os.Exit(1)
