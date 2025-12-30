@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -45,7 +46,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
+	aad := []byte("myaad")
+
+	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt), wrapping.WithAad(aad))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)
 		os.Exit(1)
@@ -65,7 +68,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Marshalled encryptedBlob: %s\n", string(prettyJSON.Bytes()))
+	fmt.Printf("Marshalled encryptedBlob: %s\n", prettyJSON.String())
 
 	err = os.WriteFile(*encryptedBlob, eb, 0644)
 	if err != nil {

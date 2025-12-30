@@ -60,6 +60,7 @@ CLI Options:
 | **`-keyName`** | User set key name (default: `key1`) |
 | **`-decrypt`** | toggle if decryption should occur  (default:  `false`) |
 | **`-tpmPath`** | path to tpm (default: `/dev/tpmrm0`) |
+| **`-aad`** | Additional data (default: ``) |
 | **`-keyPass`** | password to seal the key with (default: ``) |
 | **`-hierarchyPass`** | password for the hierarchy (if any) (for import it is for the Endorsement; for Seal it is for Owner) (default ``) |
 | **`-pcrValues`** | PCR values to bind to (comma separated pcr banks, ascending) (default ``) |
@@ -81,22 +82,22 @@ The following uses a software TPM (`swtpm`) which you can configure with the ins
 - **encrypt/decrypt**
 
 ```bash
-go-tpm-wrapping --mode=seal  \
+go-tpm-wrapping --mode=seal --aad=myaad  \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"
 
-go-tpm-wrapping --mode=seal  --decrypt \
+go-tpm-wrapping --mode=seal --aad=myaad  --decrypt \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2341"
 ```
 
 - **encrypt/decrypt with passphrase**
 
 ```bash
-go-tpm-wrapping --mode=seal  \
+go-tpm-wrapping --mode=seal --aad=myaad  \
    --dataToEncrypt=foo  --keyPass=testpass --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"
 
-go-tpm-wrapping --mode=seal --keyPass=testpass --decrypt \
+go-tpm-wrapping --mode=seal --keyPass=testpass --decrypt --aad=myaad \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2341"
 ```
 
@@ -110,13 +111,13 @@ $ tpm2_pcrread sha256:0,23
     23: 0x0000000000000000000000000000000000000000000000000000000000000000
 
 ## encrypt/decrypt
-$ go-tpm-wrapping --mode=seal  \
+$ go-tpm-wrapping --mode=seal --aad=myaad  \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json \
    --keyPass=testpass \
    --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2341" 
 
-$ go-tpm-wrapping --mode=seal  --decrypt \
+$ go-tpm-wrapping --mode=seal  --decrypt --aad=myaad \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
    --tpm-path="127.0.0.1:2341"
 ```
@@ -133,7 +134,7 @@ $ tpm2_pcrread sha256:23
   sha256:
     23: 0xF5A5FD42D16A20302798EF6ED309979B43003D2320D9F0E8EA9831A92759FB4B
 
-$ go-tpm-wrapping --mode=seal  --decrypt \
+$ go-tpm-wrapping --mode=seal  --decrypt --aad=myaad \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
     --tpm-path="127.0.0.1:2341"
 
@@ -143,7 +144,7 @@ $ go-tpm-wrapping --mode=seal  --decrypt \
 You can also specify the specific pcr's you expect during decryption. if the pcr values are different (eg )
 
 ```bash
-$ go-tpm-wrapping --mode=seal  --decrypt \
+$ go-tpm-wrapping --mode=seal  --decrypt --aad=myaad \
    --encryptedBlob=/tmp/encrypted.json --keyPass=testpass  \
    --pcrValues=0:0000000000000000000000000000000000000000000000000000000000000000,23:0000000000000000000000000000000000000000000000000000000000000000 \
    --tpm-path="127.0.0.1:2341"
@@ -158,11 +159,11 @@ If you set auth on the owner key, set the `--hierarchyPass=` parameter:
 $ export TPM2TOOLS_TCTI="swtpm:port=2341"
 $ tpm2_changeauth -c owner newpass
 
-$ go-tpm-wrapping --mode=seal \
+$ go-tpm-wrapping --mode=seal --aad=myaad \
    --dataToEncrypt=foo --hierarchyPass=newpass --encryptedBlob=/tmp/encrypted.json \
    --tpm-path="127.0.0.1:2341"
 
-$ go-tpm-wrapping --mode=seal  --hierarchyPass=newpass  --decrypt \
+$ go-tpm-wrapping --mode=seal  --hierarchyPass=newpass  --decrypt --aad=myaad \
    --encryptedBlob=/tmp/encrypted.json --tpm-path="127.0.0.1:2341"
 ```
 
@@ -198,7 +199,7 @@ The following uses a local software TPM to generate and encrypt the transfer key
 
 ```bash
 # encrypt
-go-tpm-wrapping --mode=import   \
+go-tpm-wrapping --mode=import  --aad=myaad \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --encryptedBlob=/tmp/encrypted.json 
 ```
@@ -208,7 +209,7 @@ go-tpm-wrapping --mode=import   \
 ```bash
 # decrypt
 go-tpm-wrapping --mode=import  --decrypt --encrypting_public_key=/tmp/ekpubB.pem  \
-    --encryptedBlob=/tmp/encrypted.json \
+    --encryptedBlob=/tmp/encrypted.json --aad=myaad \
     --tpm-path="127.0.0.1:2341" 
 ```
 
@@ -216,7 +217,7 @@ go-tpm-wrapping --mode=import  --decrypt --encrypting_public_key=/tmp/ekpubB.pem
 
 ```bash
 # encrypt
-$ go-tpm-wrapping --mode=import   \
+$ go-tpm-wrapping --mode=import --aad=myaad  \
    --encrypting_public_key=/tmp/ekpubB.pem \
    --dataToEncrypt=foo --keyPass=bar --encryptedBlob=/tmp/encrypted.json 
 ```
@@ -225,7 +226,7 @@ Then on a machine with the TPM, run
 
 ```bash
 # decrypt
-$ go-tpm-wrapping --mode=import  --decrypt \
+$ go-tpm-wrapping --mode=import  --decrypt --aad=myaad \
     --encryptedBlob=/tmp/encrypted.json --encrypting_public_key=/tmp/ekpubB.pem --keyPass=bar \
     --tpm-path="127.0.0.1:2341" 
 ```
@@ -331,7 +332,8 @@ import (
 
 	_, err := wrapping.SetConfig(ctx, WithTPM(*tpmPath))
 
-	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
+	aad := []byte("myaad")
+	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt), wrapping.WithAad(aad))
 
 	fmt.Printf("Encrypted: %s\n", hex.EncodeToString(blobInfo.Ciphertext))
 ```
@@ -348,7 +350,8 @@ Decrypt:
 	newBlobInfo := &wrapping.BlobInfo{}
 	err = protojson.Unmarshal(b, newBlobInfo)
 
-	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	aad := []byte("myaad")
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo, wrapping.WithAad(aad))
 
 	fmt.Printf("Decrypted %s\n", string(plaintext))
 ```
@@ -387,7 +390,8 @@ import (
 
 	_, err = wrapper.SetConfig(ctx, WithEncryptingPublicKey(hex.EncodeToString(b)))
 
-	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
+	aad := []byte("myaad")
+	blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt), wrapping.WithAad(aad))
 
 	eb, err := protojson.Marshal(blobInfo)
 
@@ -406,7 +410,8 @@ At this point, copy `encrypted_blob` to the machine where you want to transfer a
 	newBlobInfo := &wrapping.BlobInfo{}
 	err = protojson.Unmarshal(eb, newBlobInfo)
 
-	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	aad := []byte("myaad")
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo, wrapping.WithAad(aad))
 
 	fmt.Printf("Decrypted %s\n", string(plaintext))
 

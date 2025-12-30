@@ -58,7 +58,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo)
+	aad := []byte("myaad")
+
+	plaintext, err := wrapper.Decrypt(ctx, newBlobInfo, wrapping.WithAad(aad))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error decrypting %v\n", err)
 		os.Exit(1)
