@@ -57,22 +57,15 @@ Decrypt (Alice):
 6. `key = TPM_Unseal( sealed_key )`
 7. `plaintext = AEAD_Decrypt( key, ciphertext )`  
 
----
-
 For a detailed description on how these modes work, see the [Background](#background) section at the end
 
 You can use this as a library or CLI
 
 >> This library is NOT supported by google
 
----
-
 Examples below uses two [software TPMs](https://manpages.debian.org/testing/swtpm/swtpm.8.en.html) (`--tpm-path="127.0.0.1:2341"`).  IRL you'd use actual TPMs (`--tpm-path="/dev/tpm0"`).
 
 To configure the software TPM on your laptop for testing, see the `Using swtpm` section below.
-
-
----
 
 Note that this repo will transfer some arbitrary data that is decrypted on the remote system and is visible in userspace.  If on the other hand you want to transfer a an RSA/AES/HMAC key _into_ the destination TPM without ever being visible, see
 
