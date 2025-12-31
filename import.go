@@ -139,11 +139,8 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
 	wrapConfig.Metadata = make(map[string]string)
-	wrapConfig.Metadata[TPM_PATH] = s.tpmPath
 	wrapConfig.Metadata[PCR_VALUES] = s.pcrValues
 	wrapConfig.Metadata[ENCRYPTING_PUBLIC_KEY] = s.encryptingPublicKey
-	wrapConfig.Metadata[USER_AUTH] = s.userAuth
-	wrapConfig.Metadata[HIERARCHY_AUTH] = s.hierarchyAuth
 	wrapConfig.Metadata[KEY_NAME] = s.keyName
 	wrapConfig.Metadata[SESSION_ENCRYPTION_NAME] = s.encryptedSessionName
 	return wrapConfig, nil

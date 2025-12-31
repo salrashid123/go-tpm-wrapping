@@ -10,24 +10,29 @@ This library builds off of Hashicorp Vault wrapping [https://github.com/hashicor
 
 There are two modes to using this library:
 
-* `Seal/Unseal` 
+---
+
+* **Seal/Unseal**
 
   To use this, you must have access to the *same* TPM for both encrypting and decrypting.
 
   When you encrypt data, it can ONLY get decrypted by that *SAME* TPM:
 
-  Encrypt:
+Encrypt:
 
-  1. generate aead `key`
-  2. `ciphertext = AEAD_Encrypt( key, plaintext )`
-  3. `sealed_key = TPM_Seal( key )` 
+1. generate aead `key`
+2. `ciphertext = AEAD_Encrypt( key, plaintext )`
+3. `sealed_key = TPM_Seal( key )` 
 
-  Decrypt:
 
-  1. `encryptionKey = TPM_Unseal( sealed_key )`
-  2. `plaintext = AEAD_Decrypt( key, ciphertext )`
+Decrypt:
 
-* `Remote encryption`
+4. `encryptionKey = TPM_Unseal( sealed_key )`
+5. `plaintext = AEAD_Decrypt( key, ciphertext )`
+
+---
+
+* **Remote encryption**
 
   This mode utilizes a TPM `Endorsement Public Key (EKPub)` to wrap the some data which can ONLY get decrypted by the TPM that owns the EKPub
 
@@ -39,18 +44,20 @@ There are two modes to using this library:
    
    Alice shares `ekPub.pem` with Bob
 
-  Encrypt (Bob):
+Encrypt (Bob):
 
-  1. generate aead `key`
-  2. `ciphertext = AEAD_Encrypt( key, plaintext )`
-  3. `sealed_key = TPM_Seal( key )`
-  4. `duplicate_key = TPM_Duplicate( EKPub, sealed_key )`
+1. generate aead `key`
+2. `ciphertext = AEAD_Encrypt( key, plaintext )`
+3. `sealed_key = TPM_Seal( key )`
+4. `duplicate_key = TPM_Duplicate( EKPub, sealed_key )`
 
-  Decrypt (Alice):
+Decrypt (Alice):
 
-  5. `sealed_key = TPM_Import( duplicate_key )`
-  6. `key = TPM_Unseal( sealed_key )`
-  7. `plaintext = AEAD_Decrypt( key, ciphertext )`  
+5. `sealed_key = TPM_Import( duplicate_key )`
+6. `key = TPM_Unseal( sealed_key )`
+7. `plaintext = AEAD_Decrypt( key, ciphertext )`  
+
+---
 
 For a detailed description on how these modes work, see the [Background](#background) section at the end
 
