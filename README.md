@@ -1,10 +1,12 @@
-## Go-TPM-Wrapping - Go library for encrypting data using Trusted Platform Module (TPM)
+## AEAD encryption using Trusted Platform Module (TPM)
 
-Library to encrypt and decrypt data using a wrapping key thats encoded using a `Trusted Platform Module (TPM)`.
+Library to [AEAD](https://en.wikipedia.org/wiki/Authenticated_encryption) encrypt and decrypt data using a wrapping key thats encoded using a `Trusted Platform Module (TPM)`.
 
 In other words, you *must* have access to a specific TPM decrypt the wrapping key.
 
 In addition you can stipulate that the key can only get decrypted by the TPM if the user provides a passphrase or if the target system has certain `PCR` values.
+
+This library builds off of Hashicorp Vault wrapping [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping).
 
 There are two modes to using this library:
 
@@ -12,7 +14,18 @@ There are two modes to using this library:
 
   To use this, you must have access to the *same* TPM for both encrypting and decrypting.
 
-  When you encrypt data, it can ONLY get decrypted by that *SAME* TPM.
+  When you encrypt data, it can ONLY get decrypted by that *SAME* TPM:
+
+  Encrypt:
+
+  1. generate aead `key`
+  2. `ciphertext = AEAD_Encrypt( key, plaintext )`
+  3. `sealed_key = TPM_Seal( key )` 
+
+  Decrypt:
+
+  1. `encryptionKey = TPM_Unseal( sealed_key )`
+  2. `plaintext = AEAD_Decrypt( key, ciphertext )`
 
 * `Remote encryption`
 
@@ -20,9 +33,26 @@ There are two modes to using this library:
 
   This mode does not require access to a local TPM to encrypt data but does require access to the target TPM to decrypt.
 
-For a detailed description on how these modes work, see the [Background](#background) section at the end
+  If Bob wants wants to encrypt data for Alice who has a TPM,
 
-This library builds off of Hashicorp Vault wrapping [https://github.com/hashicorp/go-kms-wrapping](https://github.com/hashicorp/go-kms-wrapping).
+   Alice generates `Encorsement Public Key` keypair (`ekPub`)
+   
+   Alice shares `ekPub.pem` with Bob
+
+  Encrypt (Bob):
+
+  1. generate aead `key`
+  2. `ciphertext = AEAD_Encrypt( key, plaintext )`
+  3. `sealed_key = TPM_Seal( key )`
+  4. `duplicate_key = TPM_Duplicate( EKPub, sealed_key )`
+
+  Decrypt (Alice):
+
+  5. `sealed_key = TPM_Import( duplicate_key )`
+  6. `key = TPM_Unseal( sealed_key )`
+  7. `plaintext = AEAD_Decrypt( key, ciphertext )`  
+
+For a detailed description on how these modes work, see the [Background](#background) section at the end
 
 You can use this as a library or CLI
 
