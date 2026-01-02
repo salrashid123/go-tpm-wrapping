@@ -14,7 +14,6 @@ import (
 	//rdebug "runtime/debug"
 	"slices"
 
-	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpmutil"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	tpmwrap "github.com/salrashid123/go-tpm-wrapping"
@@ -24,7 +23,10 @@ import (
 var (
 	mode = flag.String("mode", "seal", "operation mode: seal or import")
 
-	aad = flag.String("aad", "", "with additional data")
+	aad        = flag.String("aad", "", "with additional data")
+	clientData = flag.String("clientData", "", "JSON to include as clientdata")
+
+	out = flag.String("out", "", "write decrypted data to file (default stdout)")
 
 	tpmPath = flag.String("tpm-path", "/dev/tpmrm0", "Path to the TPM device (character device or a Unix socket).")
 	//parentPass    = flag.String("parentPass", "", "TPM Parent Key password")
@@ -53,8 +55,6 @@ var TPMDEVICES = []string{"/dev/tpm0", "/dev/tpmrm0"}
 func OpenTPM(path string) (io.ReadWriteCloser, error) {
 	if slices.Contains(TPMDEVICES, path) {
 		return tpmutil.OpenTPM(path)
-	} else if path == "simulator" {
-		return simulator.GetWithFixedSeedInsecure(1073741825)
 	} else {
 		return net.Dial("tcp", path)
 	}
@@ -75,6 +75,11 @@ func main() {
 	ctx := context.Background()
 	switch *mode {
 	case "seal":
+		if *tpmPath == "" {
+			fmt.Fprintf(os.Stderr, "--tpmPath must be specified for seal/unseal\n")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
 		if !*decrypt {
 			wrapper := tpmwrap.NewWrapper()
 
@@ -82,12 +87,14 @@ func main() {
 				tpmwrap.WithTPMPath(*tpmPath),
 				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
 				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithKeyName(*keyName),
-				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
+				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName),
+				tpmwrap.WithClientData(*clientData), tpmwrap.WithDebug(*debug),
+			)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
 			}
-			wrapper.SetConfig(ctx, tpmwrap.WithDebug(*debug))
+
 			blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt), wrapping.WithAad([]byte(*aad)))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)
@@ -125,12 +132,13 @@ func main() {
 				tpmwrap.WithTPMPath(*tpmPath),
 				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
 				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithParentKeyH2(*parentKeyH2),
-				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
+				tpmwrap.WithSessionEncryptionName(*sessionEncryptionName),
+				tpmwrap.WithClientData(*clientData), tpmwrap.WithDebug(*debug))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
 			}
-			wrapper.SetConfig(ctx, tpmwrap.WithDebug(*debug))
+
 			b, err := os.ReadFile(*encryptedBlob)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading encrypted file %v\n", err)
@@ -149,10 +157,15 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error decrypting %v\n", err)
 				os.Exit(1)
 			}
-			if *debug {
-				fmt.Println("Decrypted:")
+			if *out != "" {
+				err = os.WriteFile(*out, plaintext, 0666)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing decrypted data to file %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Printf("%s", string(plaintext))
 			}
-			fmt.Printf("%s", string(plaintext))
 		}
 
 	case "import":
@@ -168,12 +181,11 @@ func main() {
 			_, err = wrapper.SetConfig(ctx,
 				tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(b)),
 				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
-				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithKeyName(*keyName))
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithKeyName(*keyName), tpmwrap.WithClientData(*clientData), tpmwrap.WithDebug(*debug))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
 			}
-			wrapper.SetConfig(ctx, tpmwrap.WithDebug(*debug))
 			blobInfo, err := wrapper.Encrypt(ctx, []byte(*dataToEncrypt))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error encrypting %v\n", err)
@@ -225,12 +237,14 @@ func main() {
 			_, err := wrapper.SetConfig(ctx,
 				tpmwrap.WithTPMPath(*tpmPath), tpmwrap.WithEncryptingPublicKey(hex.EncodeToString(ekb)),
 				tpmwrap.WithUserAuth(*keyPass), tpmwrap.WithHierarchyAuth(*hierarchyPass),
-				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithSessionEncryptionName(*sessionEncryptionName))
+				tpmwrap.WithPCRValues(*pcrValues), tpmwrap.WithSessionEncryptionName(*sessionEncryptionName),
+				tpmwrap.WithClientData(*clientData))
 			if err != nil {
+				tpmwrap.WithDebug(*debug)
 				fmt.Fprintf(os.Stderr, "Error creating wrapper %v\n", err)
 				os.Exit(1)
 			}
-			wrapper.SetConfig(ctx, tpmwrap.WithDebug(*debug))
+
 			b, err := os.ReadFile(*encryptedBlob)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading encrypted file %v\n", err)
@@ -249,15 +263,21 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Error decrypting %v\n", err)
 				os.Exit(1)
 			}
-			if *debug {
-				fmt.Println("Decrypted:")
+			if *out != "" {
+				err = os.WriteFile(*out, plaintext, 0666)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing decrypted data to file %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Printf("%s", string(plaintext))
 			}
-			fmt.Printf("%s", string(plaintext))
 
 		}
 
 	default:
 		fmt.Println("--mode must be either seal or import")
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
 

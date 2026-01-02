@@ -191,39 +191,40 @@ func TestSealPassword(t *testing.T) {
 	require.Equal(t, dataToSeal, plaintext)
 }
 
-func TestSealPasswordFail(t *testing.T) {
-	//tpmDevice, err := simulator.Get()
-	tpmDevice, err := net.Dial("tcp", swTPMPathB)
-	require.NoError(t, err)
-	defer tpmDevice.Close()
+// skip until dictionarylockout is supported
+// func TestSealPasswordFail(t *testing.T) {
+// 	//tpmDevice, err := simulator.Get()
+// 	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+// 	require.NoError(t, err)
+// 	defer tpmDevice.Close()
 
-	ctx := context.Background()
+// 	ctx := context.Background()
 
-	wrapper := NewWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"))
-	require.NoError(t, err)
+// 	wrapper := NewWrapper()
+// 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithUserAuth("foo"))
+// 	require.NoError(t, err)
 
-	dataToSeal := []byte("foo")
+// 	dataToSeal := []byte("foo")
 
-	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
-	require.NoError(t, err)
+// 	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+// 	require.NoError(t, err)
 
-	b, err := protojson.Marshal(blobInfo)
-	require.NoError(t, err)
+// 	b, err := protojson.Marshal(blobInfo)
+// 	require.NoError(t, err)
 
-	var prettyJSON bytes.Buffer
-	err = json.Indent(&prettyJSON, b, "", "\t")
-	require.NoError(t, err)
+// 	var prettyJSON bytes.Buffer
+// 	err = json.Indent(&prettyJSON, b, "", "\t")
+// 	require.NoError(t, err)
 
-	newBlobInfo := &wrapping.BlobInfo{}
-	err = protojson.Unmarshal(b, newBlobInfo)
-	require.NoError(t, err)
+// 	newBlobInfo := &wrapping.BlobInfo{}
+// 	err = protojson.Unmarshal(b, newBlobInfo)
+// 	require.NoError(t, err)
 
-	wrapper.userAuth = "bar"
+// 	wrapper.userAuth = "bar"
 
-	_, err = wrapper.Decrypt(ctx, newBlobInfo)
-	require.Error(t, err)
-}
+// 	_, err = wrapper.Decrypt(ctx, newBlobInfo)
+// 	require.Error(t, err)
+// }
 
 func TestSealEncryptedSessionPassword(t *testing.T) {
 	//tpmDevice, err := simulator.Get()
@@ -298,4 +299,243 @@ func TestSealEncryptedSessionPassword(t *testing.T) {
 
 	_, err = wrapper.Decrypt(ctx, newBlobInfo)
 	require.Error(t, err)
+}
+
+func TestSealAAD(t *testing.T) {
+
+	ctx := context.Background()
+
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	// for dictionary lockout
+	//  https://github.com/google/go-tpm/issues/422
+	// rwr := transport.FromReadWriter(tpmDevice)
+	// _, err = tpm2.DictionaryAttackLockReset{
+	// 	LockHandle: tpm2.TPMRHLockout,
+	// }.Execute(rwr)
+	// require.NoError(t, err)
+
+	keyName := "bar"
+
+	tests := []struct {
+		name          string
+		aadEncrypt    []byte
+		aadDecrypt    []byte
+		shouldSucceed bool
+	}{
+		{"aadSucceed", []byte("myaad"), []byte("myaad"), true},
+		{"aadFail", []byte("myaad"), []byte("bar"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithKeyName(keyName))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal, wrapping.WithAad(tc.aadEncrypt))
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, wrapping.WithAad(tc.aadDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+		})
+	}
+
+}
+
+func TestSealClientDataGlobal(t *testing.T) {
+
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithKeyName(keyName), WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice), WithClientData(tc.clientDataDecrypt))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo)
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+
+}
+
+func TestSealClientDataLocal(t *testing.T) {
+
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithKeyName(keyName))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal, WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, WithClientData(tc.clientDataDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestSealClientDataMix(t *testing.T) {
+
+	//tpmDevice, err := simulator.Get()
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithKeyName(keyName), WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, WithClientData(tc.clientDataDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
 }

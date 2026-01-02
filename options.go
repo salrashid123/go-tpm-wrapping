@@ -1,10 +1,12 @@
 package tpmwrap
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type Option func(*options)
@@ -61,7 +63,6 @@ type OptionFunc func(*options) error
 // options = how options are represented
 type options struct {
 	*wrapping.Options
-	withUserAgent             string
 	withTPMPath               string
 	withTPM                   io.ReadWriteCloser
 	withPCRValues             string
@@ -72,20 +73,11 @@ type options struct {
 	withSessionEncryptionName string
 	withParentKeyH2           bool
 	withDebug                 bool
+	withClientData            *structpb.Struct
 }
 
 func getDefaultOptions() options {
 	return options{}
-}
-
-// WithUserAgent provides a way to chose the user agent
-func WithUserAgent(with string) wrapping.Option {
-	return func() interface{} {
-		return OptionFunc(func(o *options) error {
-			o.withUserAgent = with
-			return nil
-		})
-	}
 }
 
 // WithUserAuth provides a way to chose the user agent
@@ -182,6 +174,27 @@ func WithDebug(with bool) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
 			o.withDebug = with
+			return nil
+		})
+	}
+}
+
+func WithClientData(with string) wrapping.Option {
+	if with == "" {
+		return nil
+	}
+	return func() interface{} {
+		return OptionFunc(func(o *options) error {
+			var dataMap map[string]interface{}
+			err := json.Unmarshal([]byte(with), &dataMap)
+			if err != nil {
+				return err
+			}
+			protoStruct, err := structpb.NewStruct(dataMap)
+			if err != nil {
+				return err
+			}
+			o.withClientData = protoStruct
 			return nil
 		})
 	}

@@ -9,15 +9,16 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"math/big"
-	"os"
 	"sync/atomic"
 
 	keyfile "github.com/foxboron/go-tpm-keyfiles"
@@ -25,11 +26,13 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpmutil"
 	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
+	wrapaead "github.com/hashicorp/go-kms-wrapping/v2/aead"
 	tpmwrappb "github.com/salrashid123/go-tpm-wrapping/tpmwrappb"
 	genkeyutil "github.com/salrashid123/tpm2genkey/util"
 
 	context "golang.org/x/net/context"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -54,6 +57,7 @@ type RemoteWrapper struct {
 	keyName              string
 	parentKeyH2          bool
 	debug                bool
+	clientData           *structpb.Struct
 }
 
 var (
@@ -76,65 +80,22 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 		return nil, err
 	}
 
-	s.userAgent = opts.withUserAgent
-	switch {
-	case os.Getenv(EnvTPMPath) != "" && !opts.Options.WithDisallowEnvVars:
-		s.tpmPath = os.Getenv(EnvTPMPath)
-	case opts.withTPMPath != "":
-		s.tpmPath = opts.withTPMPath
+	if opts.WithAad != nil {
+		return nil, fmt.Errorf("AAD must be specified only on Encrypt or Decrypt")
 	}
 
-	switch {
-	case os.Getenv(EnvEncryptingPublicKey) != "" && !opts.Options.WithDisallowEnvVars:
-		s.encryptingPublicKey = os.Getenv(EnvEncryptingPublicKey)
-	case opts.withEncryptingPublicKey != "":
-		s.encryptingPublicKey = opts.withEncryptingPublicKey
-	}
-
-	switch {
-	case os.Getenv(EnvPCRValues) != "" && !opts.Options.WithDisallowEnvVars:
-		s.pcrValues = os.Getenv(EnvPCRValues)
-	case opts.withPCRValues != "":
-		s.pcrValues = opts.withPCRValues
-	}
-
-	if opts.withTPM != nil {
-		if s.tpmPath != "" {
-			return nil, fmt.Errorf("cannot specify both TPMPath and TPMDevice")
-		}
-		s.tpmDevice = opts.withTPM
-	}
-
-	switch {
-	case os.Getenv(EnvUserAuth) != "" && !opts.Options.WithDisallowEnvVars:
-		s.userAuth = os.Getenv(EnvUserAuth)
-	case opts.withUserAuth != "":
-		s.userAuth = opts.withUserAuth
-	}
-
-	switch {
-	case os.Getenv(EnvHierarchyAuth) != "" && !opts.Options.WithDisallowEnvVars:
-		s.hierarchyAuth = os.Getenv(EnvHierarchyAuth)
-	case opts.withHierarchyAuth != "":
-		s.hierarchyAuth = opts.withHierarchyAuth
-	}
-
-	switch {
-	case os.Getenv(EnvKeyName) != "" && !opts.Options.WithDisallowEnvVars:
-		s.keyName = os.Getenv(EnvKeyName)
-	case opts.withKeyName != "":
-		s.keyName = opts.withKeyName
-	}
-
-	switch {
-	case os.Getenv(EnvSessionEncryptionName) != "" && !opts.Options.WithDisallowEnvVars:
-		s.encryptedSessionName = os.Getenv(EnvSessionEncryptionName)
-	case opts.withSessionEncryptionName != "":
-		s.encryptedSessionName = opts.withSessionEncryptionName
-	}
+	s.tpmPath = opts.withTPMPath
+	s.encryptingPublicKey = opts.withEncryptingPublicKey
+	s.pcrValues = opts.withPCRValues
+	s.tpmDevice = opts.withTPM
+	s.userAuth = opts.withUserAuth
+	s.hierarchyAuth = opts.withHierarchyAuth
+	s.keyName = opts.withKeyName
+	s.encryptedSessionName = opts.withSessionEncryptionName
 
 	s.parentKeyH2 = opts.withParentKeyH2
 	s.debug = opts.withDebug
+	s.clientData = opts.withClientData
 
 	// Map that holds non-sensitive configuration info to return
 	wrapConfig := new(wrapping.WrapperConfig)
@@ -164,10 +125,10 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		fmt.Printf("Encrypting with name %s\n", s.keyName)
 	}
 
-	// first encrypt the provided plaintext using the underlying library
-	env, err := wrapping.EnvelopeEncrypt(plaintext, opt...)
-	if err != nil {
-		return nil, fmt.Errorf("error wrapping data: %w", err)
+	// create an encryption key
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("error generating random %v", err)
 	}
 
 	// currently both userauth and pcr policy are not supported together
@@ -244,8 +205,6 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	if s.debug {
 		fmt.Printf("EK Name %s\n", hex.EncodeToString(ekName.Buffer))
 	}
-
-	/// ************************************8
 
 	var dupPub []byte
 	var dupDup []byte
@@ -473,13 +432,11 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	}
 
-	keySensitive := env.Key
-
 	sv := make([]byte, 32)
 	io.ReadFull(rand.Reader, sv)
 	privHash := crypto.SHA256.New()
 	privHash.Write(sv)
-	privHash.Write(keySensitive)
+	privHash.Write(key)
 
 	dupTemplate := tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgKeyedHash,
@@ -508,7 +465,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		},
 		Sensitive: tpm2.NewTPMUSensitiveComposite(
 			tpm2.TPMAlgKeyedHash,
-			&tpm2.TPM2BSensitiveData{Buffer: keySensitive},
+			&tpm2.TPM2BSensitiveData{Buffer: key},
 		),
 		AuthValue: tpm2.TPM2BAuth{
 			Buffer: []byte(s.userAuth),
@@ -697,19 +654,43 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		return nil, fmt.Errorf("failed to wrap proto Key: %v", err)
 	}
 
+	opts, err := getOpts(opt...)
+	if err != nil {
+		return nil, err
+	}
+	cd := s.clientData
+	if opts.withClientData != nil {
+		cd = opts.withClientData
+	}
+
+	// now encrypt the plaintext using the aes-gcm key which we sealed earlier into the tpm object
+	// the library we're using to do that is "github.com/hashicorp/go-kms-wrapping/v2/aead"
+	w := wrapaead.NewWrapper()
+	err = w.SetAesGcmKeyBytes(key)
+	if err != nil {
+		return nil, fmt.Errorf("error setting AESGCM Key %v", err)
+	}
+	cr, err := w.Encrypt(ctx, plaintext, opt...)
+	if err != nil {
+		return nil, fmt.Errorf("error encrypting %v", err)
+	}
+
 	// Store current key id value
 	s.currentKeyId.Store(s.keyName)
 
 	// return the cipher, the original IV we used in  wrapping.EnvelopeEncrypt(plaintext, opt...)
 	// and the bytes of the protobuf as the wrapped key
+	// note the ciphertext already has the iv added into it
+	//     https://github.com/hashicorp/go-kms-wrapping/blob/main/aead/aead.go#L242-L249
 	ret := &wrapping.BlobInfo{
-		Ciphertext: env.Ciphertext,
-		Iv:         env.Iv,
+		Ciphertext: cr.Ciphertext,
+		//Iv:         cr.Iv,
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMImport,
 			KeyId:      s.keyName,
 			WrappedKey: b,
 		},
+		ClientData: cd,
 	}
 
 	return ret, nil
@@ -804,6 +785,38 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 	if s.debug {
 		fmt.Printf("Decrypting with name %s\n", wrappb.Name)
+	}
+
+	cd := s.clientData
+	opts, err := getOpts(opt...)
+	if err != nil {
+		return nil, err
+	}
+	if opts.withClientData != nil {
+		cd = opts.withClientData
+	}
+
+	if cd != nil {
+
+		ejsonBytes, err := json.Marshal(in.ClientData.AsMap())
+		if err != nil {
+			return nil, fmt.Errorf("failed to read clientData from blobinfo: %v", err)
+		}
+		ehasher := sha256.New()
+		ehasher.Write(ejsonBytes)
+		ehashBytes := ehasher.Sum(nil)
+
+		providedJsonBytes, err := json.Marshal(cd.AsMap())
+		if err != nil {
+			return nil, fmt.Errorf("failed to read clientData from parameter: %v", err)
+		}
+		phasher := sha256.New()
+		phasher.Write(providedJsonBytes)
+		phashBytes := phasher.Sum(nil)
+
+		if !bytes.Equal(ehashBytes, phashBytes) {
+			return nil, fmt.Errorf("Provided client_data does not match.  \nfrom blobinfo \n[%s]\nfrom prarameter \n[%s]", in.ClientData.String(), cd.String())
+		}
 	}
 
 	if wrappb.Type != tpmwrappb.Secret_DUPLICATE {
@@ -1105,7 +1118,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 		}
 
-		var decrypted []byte
+		var decryptedKey []byte
 		if len(pcrList) > 0 {
 
 			sel := tpm2.TPMLPCRSelection{
@@ -1147,7 +1160,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				return nil, fmt.Errorf("unseal failed: %s", err)
 			}
 
-			decrypted = unseaResp.OutData.Buffer
+			decryptedKey = unseaResp.OutData.Buffer
 
 		} else {
 
@@ -1180,20 +1193,19 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				return nil, fmt.Errorf("unseal failed: %s", err)
 			}
 
-			decrypted = unseaResp.OutData.Buffer
+			decryptedKey = unseaResp.OutData.Buffer
 		}
 
-		// set the original encryption key, the iv and ciphertext as the struct
-		envInfo := &wrapping.EnvelopeInfo{
-			Key:        decrypted,
-			Iv:         in.Iv,
-			Ciphertext: in.Ciphertext,
-		}
-
-		// reverse the whole operation
-		plaintext, err = wrapping.EnvelopeDecrypt(envInfo, opt...)
+		// now decrypt the plaintext using the aes-gcm key which we sealed earlier into the tpm object
+		// the library we're using to do that is "github.com/hashicorp/go-kms-wrapping/v2/aead"
+		w := wrapaead.NewWrapper()
+		err = w.SetAesGcmKeyBytes(decryptedKey)
 		if err != nil {
-			return nil, fmt.Errorf("error decrypting data with envelope: %w", err)
+			return nil, fmt.Errorf("error setting AESGCM Key %v", err)
+		}
+		plaintext, err = w.Decrypt(ctx, in, opt...)
+		if err != nil {
+			return nil, fmt.Errorf("error decrypting %v", err)
 		}
 
 	default:

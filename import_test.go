@@ -608,7 +608,88 @@ func TestImportPassword(t *testing.T) {
 	require.Equal(t, dataToSeal, plaintext)
 }
 
-func TestImportPasswordFail(t *testing.T) {
+// skip until dictionarylockout is supported
+// func TestImportPasswordFail(t *testing.T) {
+// 	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
+// 	require.NoError(t, err)
+// 	defer tpmDevice.Close()
+
+// 	rwr := transport.FromReadWriter(tpmDevice)
+
+// 	cCreateEEK, err := tpm2.CreatePrimary{
+// 		PrimaryHandle: tpm2.TPMRHEndorsement,
+// 		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+// 	}.Execute(rwr)
+// 	require.NoError(t, err)
+
+// 	pub, err := tpm2.ReadPublic{
+// 		ObjectHandle: cCreateEEK.ObjectHandle,
+// 	}.Execute(rwr)
+// 	require.NoError(t, err)
+
+// 	outPub, err := pub.OutPublic.Contents()
+// 	require.NoError(t, err)
+
+// 	rsaDetail, err := outPub.Parameters.RSADetail()
+// 	require.NoError(t, err)
+
+// 	rsaUnique, err := outPub.Unique.RSA()
+// 	require.NoError(t, err)
+
+// 	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+// 	require.NoError(t, err)
+
+// 	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
+// 	require.NoError(t, err)
+// 	pemdata := pem.EncodeToMemory(
+// 		&pem.Block{
+// 			Type:  "PUBLIC KEY",
+// 			Bytes: rb,
+// 		},
+// 	)
+
+// 	flushContextCmd := tpm2.FlushContext{
+// 		FlushHandle: cCreateEEK.ObjectHandle,
+// 	}
+// 	_, err = flushContextCmd.Execute(rwr)
+// 	require.NoError(t, err)
+
+// 	ctx := context.Background()
+
+// 	pass := "foo"
+// 	badpass := "bar"
+
+// 	wrapper := NewRemoteWrapper()
+// 	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithUserAuth(pass))
+// 	require.NoError(t, err)
+
+// 	dataToSeal := []byte("foo")
+
+// 	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+// 	require.NoError(t, err)
+
+// 	b, err := protojson.Marshal(blobInfo)
+// 	require.NoError(t, err)
+
+// 	var prettyJSON bytes.Buffer
+// 	err = json.Indent(&prettyJSON, b, "", "\t")
+// 	require.NoError(t, err)
+
+// 	newBlobInfo := &wrapping.BlobInfo{}
+// 	err = protojson.Unmarshal(b, newBlobInfo)
+// 	require.NoError(t, err)
+
+// 	newwrapper := NewRemoteWrapper()
+// 	_, err = newwrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithUserAuth(badpass))
+// 	require.NoError(t, err)
+
+// 	_, err = newwrapper.Decrypt(ctx, newBlobInfo)
+// 	require.Error(t, err)
+// }
+
+func TestImportAAD(t *testing.T) {
+
 	tpmDevice, err := net.Dial("tcp", swTPMPathB)
 
 	require.NoError(t, err)
@@ -656,33 +737,344 @@ func TestImportPasswordFail(t *testing.T) {
 
 	ctx := context.Background()
 
-	pass := "foo"
-	badpass := "bar"
+	keyName := "bar"
 
-	wrapper := NewRemoteWrapper()
-	_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithUserAuth(pass))
+	tests := []struct {
+		name          string
+		aadEncrypt    []byte
+		aadDecrypt    []byte
+		shouldSucceed bool
+	}{
+		{"aadSucceed", []byte("myaad"), []byte("myaad"), true},
+		{"aadFail", []byte("myaad"), []byte("bar"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal, wrapping.WithAad(tc.aadEncrypt))
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, wrapping.WithAad(tc.aadDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+
+		})
+	}
+
+}
+
+func TestImportClientDataGlobal(t *testing.T) {
+
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
 	require.NoError(t, err)
 
-	dataToSeal := []byte("foo")
-
-	blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
 	require.NoError(t, err)
 
-	b, err := protojson.Marshal(blobInfo)
+	outPub, err := pub.OutPublic.Contents()
 	require.NoError(t, err)
 
-	var prettyJSON bytes.Buffer
-	err = json.Indent(&prettyJSON, b, "", "\t")
+	rsaDetail, err := outPub.Parameters.RSADetail()
 	require.NoError(t, err)
 
-	newBlobInfo := &wrapping.BlobInfo{}
-	err = protojson.Unmarshal(b, newBlobInfo)
+	rsaUnique, err := outPub.Unique.RSA()
 	require.NoError(t, err)
 
-	newwrapper := NewRemoteWrapper()
-	_, err = newwrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithUserAuth(badpass))
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
 	require.NoError(t, err)
 
-	_, err = newwrapper.Decrypt(ctx, newBlobInfo)
-	require.Error(t, err)
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
+	require.NoError(t, err)
+	pemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName), WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithClientData(tc.clientDataDecrypt))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo)
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+
+}
+
+func TestImportClientDataLocal(t *testing.T) {
+
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
+	require.NoError(t, err)
+	pemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal, WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, WithClientData(tc.clientDataDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestImportClientDataMix(t *testing.T) {
+
+	tpmDevice, err := net.Dial("tcp", swTPMPathB)
+
+	require.NoError(t, err)
+	defer tpmDevice.Close()
+
+	rwr := transport.FromReadWriter(tpmDevice)
+
+	cCreateEEK, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(tpm2.RSAEKTemplate),
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	pub, err := tpm2.ReadPublic{
+		ObjectHandle: cCreateEEK.ObjectHandle,
+	}.Execute(rwr)
+	require.NoError(t, err)
+
+	outPub, err := pub.OutPublic.Contents()
+	require.NoError(t, err)
+
+	rsaDetail, err := outPub.Parameters.RSADetail()
+	require.NoError(t, err)
+
+	rsaUnique, err := outPub.Unique.RSA()
+	require.NoError(t, err)
+
+	rsaPub, err := tpm2.RSAPub(rsaDetail, rsaUnique)
+	require.NoError(t, err)
+
+	rb, err := x509.MarshalPKIXPublicKey(rsaPub)
+	require.NoError(t, err)
+	pemdata := pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: rb,
+		},
+	)
+
+	flushContextCmd := tpm2.FlushContext{
+		FlushHandle: cCreateEEK.ObjectHandle,
+	}
+	_, err = flushContextCmd.Execute(rwr)
+	require.NoError(t, err)
+
+	keyName := "bar"
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		clientDataEncrypt string
+		clientDataDecrypt string
+
+		shouldSucceed bool
+	}{
+		{"ClientDataGlobalSucceed", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider1\"}", true},
+		{"ClientDataGlobalFail", "{\"provider\": \"provider1\"}", "{\"provider\": \"provider2\"}", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+
+			wrapper := NewWrapper()
+			_, err = wrapper.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)), WithKeyName(keyName), WithClientData(tc.clientDataEncrypt))
+			require.NoError(t, err)
+
+			dataToSeal := []byte("foo")
+
+			blobInfo, err := wrapper.Encrypt(ctx, dataToSeal)
+			require.NoError(t, err)
+
+			b, err := protojson.Marshal(blobInfo)
+			require.NoError(t, err)
+
+			var prettyJSON bytes.Buffer
+			err = json.Indent(&prettyJSON, b, "", "\t")
+			require.NoError(t, err)
+
+			newBlobInfo := &wrapping.BlobInfo{}
+			err = protojson.Unmarshal(b, newBlobInfo)
+			require.NoError(t, err)
+
+			wrapperD := NewWrapper()
+			_, err = wrapperD.SetConfig(ctx, WithTPM(tpmDevice), WithEncryptingPublicKey(hex.EncodeToString(pemdata)))
+			require.NoError(t, err)
+
+			_, err = wrapperD.Decrypt(ctx, newBlobInfo, WithClientData(tc.clientDataDecrypt))
+			if tc.shouldSucceed {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
 }

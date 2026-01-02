@@ -23,17 +23,6 @@ import (
 )
 
 const (
-	EnvTPMPath             = "TPM_PATH"
-	EnvPCRValues           = "TPM_PCR_VALUES"
-	EnvEncryptingPublicKey = "TPM_ENCRYPTING_PUBLIC_KEY"
-	EnvUserAuth            = "TPM_USER_AUTH"
-	EnvHierarchyAuth       = "TPM_HIERARCHY_AUTH"
-	EnvParentKeyH2         = "TPM_PARENT_KEY_H2"
-
-	EnvKeyName               = "TPM_KEY_NAME"
-	EnvDEBUG                 = "TPM_DEBUG"
-	EnvSessionEncryptionName = "TPM_SESSION_ENCRYPTION_NAME"
-
 	TPM_PATH                = "tpm_path"
 	PCR_VALUES              = "pcr_values"
 	USER_AUTH               = "user_auth"
@@ -43,7 +32,7 @@ const (
 	ENCRYPTING_PUBLIC_KEY   = "encrypting_public_key"
 	SESSION_ENCRYPTION_NAME = "session_encryption_name"
 
-	KEY_VERSION = 2
+	KEY_VERSION = 3
 
 	DEBUG = "debug"
 )
