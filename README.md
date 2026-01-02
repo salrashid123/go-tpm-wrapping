@@ -18,17 +18,17 @@ There are two modes to using this library:
 
   When you encrypt data, it can ONLY get decrypted by that *SAME* TPM:
 
-Encrypt:
+   Encrypt:
 
-1. generate aead `key`
-2. `ciphertext = AEAD_Encrypt( key, plaintext )`
-3. `sealed_key = TPM_Seal( key )` 
+   - `1`: generate aead `key`
+   - `2`: `ciphertext = AEAD_Encrypt( key, plaintext )`
+   - `3`: `sealed_key = TPM_Seal( key )` 
 
 
-Decrypt:
+   Decrypt:
 
-4. `encryptionKey = TPM_Unseal( sealed_key )`
-5. `plaintext = AEAD_Decrypt( key, ciphertext )`
+   - `4`: `encryptionKey = TPM_Unseal( sealed_key )`
+   - `5`: `plaintext = AEAD_Decrypt( key, ciphertext )`
 
 ---
 
@@ -44,18 +44,18 @@ Decrypt:
    
    Alice shares `ekPub.pem` with Bob
 
-Encrypt (Bob):
+   Encrypt (Bob):
 
-1. generate aead `key`
-2. `ciphertext = AEAD_Encrypt( key, plaintext )`
-3. `sealed_key = TPM_Seal( key )`
-4. `duplicate_key = TPM_Duplicate( EKPub, sealed_key )`
+   - `1`: generate aead `key`
+   - `2`: `ciphertext = AEAD_Encrypt( key, plaintext )`
+   - `3`: `sealed_key = TPM_Seal( key )`
+   - `4`: `duplicate_key = TPM_Duplicate( EKPub, sealed_key )`
 
-Decrypt (Alice):
+   Decrypt (Alice):
 
-5. `sealed_key = TPM_Import( duplicate_key )`
-6. `key = TPM_Unseal( sealed_key )`
-7. `plaintext = AEAD_Decrypt( key, ciphertext )`  
+   - `4`: `sealed_key = TPM_Import( duplicate_key )`
+   - `5`: `key = TPM_Unseal( sealed_key )`
+   - `6`: `plaintext = AEAD_Decrypt( key, ciphertext )`  
 
 ---
 
@@ -643,6 +643,7 @@ There are two levels of encryption involved with this library and is best descri
 	w := wrapaead.NewWrapper()
 	err := w.SetAesGcmKeyBytes(key)
 	cipherText, _ := w.Encrypt(ctx, plaintext, opt...)
+   wrappedKey.keyFile = tpm2.Seal( tpm2_object( type=TPMAlgKeyedHash, secret=key ) )
    ```
 
 * `ciphertext`: the encrypted data wrapped using `key` which includes the initialization vector
@@ -660,7 +661,7 @@ There are two levels of encryption involved with this library and is best descri
 
 If you base64decode the `wrappedKey`
 
-* `keyfile` is the PEM encoded private key which has sealed the `key`
+* `keyfile` is the PEM encoded TPM object which has the `key` sealed inside it
 
 The keyfile is:
 
@@ -679,7 +680,7 @@ The keyfile is:
 1. First load the `keyfile` and unseal:
 
    ```golang
-   key, err := tpm2.Unseal(keyfile)
+   key, err := tpm2.Unseal(wrappedKey.keyFile)
    ```
 
 2. Create new *direct* aead wrapper using `wrapaead "github.com/hashicorp/go-kms-wrapping/v2/aead"` and set  `key` as the decryption key.
