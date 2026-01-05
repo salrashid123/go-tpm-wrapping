@@ -81,7 +81,7 @@ func (s *RemoteWrapper) SetConfig(_ context.Context, opt ...wrapping.Option) (*w
 	}
 
 	if opts.WithAad != nil {
-		return nil, fmt.Errorf("AAD must be specified only on Encrypt or Decrypt")
+		return nil, fmt.Errorf("go-tpm-wrapping: AAD must be specified only on Encrypt or Decrypt")
 	}
 
 	s.tpmPath = opts.withTPMPath
@@ -118,32 +118,22 @@ func (s *RemoteWrapper) KeyId(_ context.Context) (string, error) {
 // Encrypts data using a TPM's Storage Root Key (SRK)
 func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wrapping.Option) (*wrapping.BlobInfo, error) {
 	if plaintext == nil {
-		return nil, errors.New("given plaintext for encryption is nil")
-	}
-
-	if s.debug {
-		fmt.Printf("Encrypting with name %s\n", s.keyName)
-	}
-
-	// create an encryption key
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("error generating random %v", err)
+		return nil, errors.New("go-tpm-wrapping: given plaintext for encryption is nil")
 	}
 
 	// currently both userauth and pcr policy are not supported together
 	if s.userAuth != "" && s.pcrValues != "" {
-		return nil, fmt.Errorf("both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
+		return nil, fmt.Errorf("go-tpm-wrapping: both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
 	}
 
 	// first read the remote TPM-A's encryption public key and attempt to derive its "name"
 	if s.encryptingPublicKey == "" {
-		return nil, fmt.Errorf("encrypting public key must be set")
+		return nil, fmt.Errorf("go-tpm-wrapping: encrypting public key must be set")
 	}
 
 	pubPEMData, err := hex.DecodeString(s.encryptingPublicKey)
 	if err != nil {
-		return nil, fmt.Errorf(" error decoding public key  : %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping:  error decoding public key  : %v", err)
 	}
 
 	var ekPububFromPEMTemplate tpm2.TPMTPublic
@@ -152,14 +142,14 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	block, _ := pem.Decode(pubPEMData)
 	parsedKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf(" unable parsing encrypting public key : %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping:  unable parsing encrypting public key : %v", err)
 	}
 
 	switch pub := parsedKey.(type) {
 	case *rsa.PublicKey:
 		rsaPub, ok := parsedKey.(*rsa.PublicKey)
 		if !ok {
-			return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+			return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to rsa")
 		}
 		parentKeyType = tpmwrappb.DuplicatedKey_EndorsementRSA
 		ekPububFromPEMTemplate = tpm2.RSAEKTemplate
@@ -172,7 +162,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	case *ecdsa.PublicKey:
 		ecPub, ok := parsedKey.(*ecdsa.PublicKey)
 		if !ok {
-			return nil, fmt.Errorf(" error converting encryptingPublicKey to ecdsa")
+			return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to ecdsa")
 		}
 		if s.parentKeyH2 {
 			parentKeyType = tpmwrappb.DuplicatedKey_H2
@@ -194,16 +184,18 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			},
 		)
 	default:
-		return nil, fmt.Errorf("unsupported public key type %v", pub)
+		return nil, fmt.Errorf("go-tpm-wrapping: unsupported public key type %v", pub)
 	}
 
 	ekName, err := tpm2.ObjectName(&ekPububFromPEMTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get name key: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to get name key: %v", err)
 	}
 
-	if s.debug {
-		fmt.Printf("EK Name %s\n", hex.EncodeToString(ekName.Buffer))
+	// create an aes256 encryption key
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("go-tpm-wrapping: error generating random %v", err)
 	}
 
 	var dupPub []byte
@@ -219,38 +211,38 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	if parentKeyType == tpmwrappb.DuplicatedKey_EndorsementRSA {
 		rsaDetailB, err := ekPububFromPEMTemplate.Parameters.RSADetail()
 		if err != nil {
-			return nil, fmt.Errorf(" error getting RSADetail %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error getting RSADetail %v ", err)
 		}
 
 		rsaUniqueB, err := ekPububFromPEMTemplate.Unique.RSA()
 		if err != nil {
-			return nil, fmt.Errorf(" error getting RSA Unique %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error getting RSA Unique %v ", err)
 
 		}
 
 		ekrsaPub, err = tpm2.RSAPub(rsaDetailB, rsaUniqueB)
 		if err != nil {
-			return nil, fmt.Errorf(" error getting RSA Publcic key from template %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error getting RSA Publcic key from template %v ", err)
 		}
 
 		aeskeybits, err = rsaDetailB.Symmetric.KeyBits.AES()
 		if err != nil {
-			return nil, fmt.Errorf("error getting AESKeybits: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error getting AESKeybits: %v", err)
 		}
 
 	} else {
 		ecDetail, err := ekPububFromPEMTemplate.Parameters.ECCDetail()
 		if err != nil {
-			return nil, fmt.Errorf("error getting ECCDetail %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error getting ECCDetail %v ", err)
 		}
 
 		crv, err := ecDetail.CurveID.Curve()
 		if err != nil {
-			return nil, fmt.Errorf(" error getting ECC Curve %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error getting ECC Curve %v ", err)
 		}
 		eccUnique, err := ekPububFromPEMTemplate.Unique.ECC()
 		if err != nil {
-			return nil, fmt.Errorf("error getting ECC Public Key from template %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error getting ECC Public Key from template %v ", err)
 		}
 
 		ekeccPub = &ecdsa.PublicKey{
@@ -260,7 +252,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		}
 		aeskeybits, err = ecDetail.Symmetric.KeyBits.AES()
 		if err != nil {
-			return nil, fmt.Errorf("error getting AESKeybits: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error getting AESKeybits: %v", err)
 		}
 
 	}
@@ -268,7 +260,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	// get the pcr values specified to bind against
 	pcrMap, pcrs, pcrHash, err := getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
 	if err != nil {
-		return nil, fmt.Errorf(" Could not get PCRMap: %s", err)
+		return nil, fmt.Errorf("go-tpm-wrapping:  Could not get PCRMap: %s", err)
 	}
 
 	sel := tpm2.TPMLPCRSelection{
@@ -283,7 +275,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	// if we have pcrValues set, then we're using PCRPolicy, otherwise userAuth
 	if s.pcrValues != "" {
 		if s.debug {
-			fmt.Printf("PCR Hash: %s\n", hex.EncodeToString(pcrHash))
+			fmt.Printf("go-tpm-wrapping: PCR Hash: %s\n", hex.EncodeToString(pcrHash))
 		}
 		papcr := tpm2.PolicyPCR{
 			PcrDigest: tpm2.TPM2BDigest{
@@ -296,15 +288,15 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		pol, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for PolicyAuthValue : %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for PolicyAuthValue : %v", err)
 		}
 		err = papcr.Update(pol)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for PolicyAuthValue %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for PolicyAuthValue %v", err)
 		}
 		e, err := genkeyutil.CPBytes(papcr)
 		if err != nil {
-			return nil, fmt.Errorf("error creating cpbytes PolicyAuthValue: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error creating cpbytes PolicyAuthValue: %v", err)
 		}
 
 		ap = append(ap, &keyfile.TPMPolicy{
@@ -321,15 +313,15 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		polds, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for policyDuplicateSelect: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for policyDuplicateSelect: %v", err)
 		}
 		err = pds.Update(polds)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for policyDuplicateSelect: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for policyDuplicateSelect: %v", err)
 		}
 		de, err := genkeyutil.CPBytes(pds)
 		if err != nil {
-			return nil, fmt.Errorf("error creating cpbytes PolicyDuplicationSelect: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error creating cpbytes PolicyDuplicationSelect: %v", err)
 		}
 
 		ap = append(ap, &keyfile.TPMPolicy{
@@ -343,16 +335,16 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		polOR, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for policyOR: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for policyOR: %v", err)
 		}
 		err = por.Update(polOR)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for policyOR: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for policyOR: %v", err)
 		}
 
 		porA, err := genkeyutil.CPBytes(por)
 		if err != nil {
-			return nil, fmt.Errorf("error creating cpbytes PolicyOr: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error creating cpbytes PolicyOr: %v", err)
 		}
 
 		ap = append(ap, &keyfile.TPMPolicy{
@@ -367,15 +359,15 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		pol, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for PolicyAuthValue : %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for PolicyAuthValue : %v", err)
 		}
 		err = paa.Update(pol)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for PolicyAuthValue %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for PolicyAuthValue %v", err)
 		}
 		e, err := genkeyutil.CPBytes(paa)
 		if err != nil {
-			return nil, fmt.Errorf("error creating cpbytes PolicyAuthValue: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error creating cpbytes PolicyAuthValue: %v", err)
 		}
 
 		ap = append(ap, &keyfile.TPMPolicy{
@@ -389,11 +381,11 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		polds, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for policyDuplicateSelect: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for policyDuplicateSelect: %v", err)
 		}
 		err = pds.Update(polds)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for policyDuplicateSelect: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for policyDuplicateSelect: %v", err)
 		}
 		de, err := genkeyutil.CPBytes(pds)
 		if err != nil {
@@ -411,16 +403,16 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		polOR, err := tpm2.NewPolicyCalculator(tpm2.TPMAlgSHA256)
 		if err != nil {
-			return nil, fmt.Errorf("error setting up NewPolicyCalculator for policyOR: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting up NewPolicyCalculator for policyOR: %v", err)
 		}
 		err = por.Update(polOR)
 		if err != nil {
-			return nil, fmt.Errorf("error updating NewPolicyCalculator for policyOR: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error updating NewPolicyCalculator for policyOR: %v", err)
 		}
 
 		porA, err := genkeyutil.CPBytes(por)
 		if err != nil {
-			return nil, fmt.Errorf("error creating cpbytes PolicyOr: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error creating cpbytes PolicyOr: %v", err)
 		}
 
 		ap = append(ap, &keyfile.TPMPolicy{
@@ -432,12 +424,14 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	}
 
+	// generate integrity hash of the secret to seal
 	sv := make([]byte, 32)
 	io.ReadFull(rand.Reader, sv)
 	privHash := crypto.SHA256.New()
 	privHash.Write(sv)
 	privHash.Write(key)
 
+	// setup the duplicate template which includes the policy digest
 	dupTemplate := tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgKeyedHash,
 		NameAlg: tpm2.TPMAlgSHA256,
@@ -448,12 +442,12 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			UserWithAuth:        false,
 		},
 		AuthPolicy: tpm2.TPM2BDigest{
-			Buffer: finalPolicyDigest,
+			Buffer: finalPolicyDigest, /// policy digest
 		},
 		Unique: tpm2.NewTPMUPublicID(
 			tpm2.TPMAlgKeyedHash,
 			&tpm2.TPM2BDigest{
-				Buffer: privHash.Sum(nil),
+				Buffer: privHash.Sum(nil), // hash of the random+secret
 			},
 		),
 	}
@@ -461,11 +455,11 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	dupSensitive := tpm2.TPMTSensitive{
 		SensitiveType: tpm2.TPMAlgKeyedHash,
 		SeedValue: tpm2.TPM2BDigest{
-			Buffer: sv,
+			Buffer: sv, // add the random
 		},
 		Sensitive: tpm2.NewTPMUSensitiveComposite(
 			tpm2.TPMAlgKeyedHash,
-			&tpm2.TPM2BSensitiveData{Buffer: key},
+			&tpm2.TPM2BSensitiveData{Buffer: key}, // <<<<<<<<<<<<<<<<  encode the aes356 key here
 		),
 		AuthValue: tpm2.TPM2BAuth{
 			Buffer: []byte(s.userAuth),
@@ -481,7 +475,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	h, err := ekPububFromPEMTemplate.NameAlg.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("error getting nameHash from EKTemplate %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error getting nameHash from EKTemplate %v", err)
 	}
 
 	switch parentKeyType {
@@ -490,7 +484,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		seedSize := *aeskeybits / 8
 		seed = make([]byte, seedSize)
 		if _, err := io.ReadFull(rand.Reader, seed); err != nil {
-			return nil, fmt.Errorf("error getting random for EKRSA %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error getting random for EKRSA %v ", err)
 		}
 
 		es, err := rsa.EncryptOAEP(
@@ -500,19 +494,19 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			seed,
 			[]byte("DUPLICATE\x00"))
 		if err != nil {
-			return nil, fmt.Errorf("error  EncryptOAEP: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error  EncryptOAEP: %v", err)
 		}
 
 		encryptedSeed, err = tpmutil.Pack(es)
 		if err != nil {
-			return nil, fmt.Errorf("error packing encryptedseed: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error packing encryptedseed: %v", err)
 		}
 
 	case tpmwrappb.DuplicatedKey_EndorsementECC, tpmwrappb.DuplicatedKey_H2:
 
 		ecp, err := ecdsa.GenerateKey(ekeccPub.Curve, rand.Reader)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate ecc key %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed to generate ecc key %v ", err)
 		}
 		x := ecp.X
 		y := ecp.Y
@@ -521,7 +515,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 		create, err := ekPububFromPEMTemplate.NameAlg.Hash()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get hash from template %v ", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed to get hash from template %v ", err)
 		}
 		xBytes := eccIntToBytes(ekeccPub.Curve, x)
 		seed = tpm2.KDFe(
@@ -532,20 +526,20 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 			eccIntToBytes(ekeccPub.Curve, ekeccPub.X),
 			create.Size()*8)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create kdfe: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed to create kdfe: %v", err)
 		}
 
 		encryptedSeed, err = tpmutil.Pack(tpmutil.U16Bytes(xBytes), tpmutil.U16Bytes(eccIntToBytes(ekeccPub.Curve, y)))
 		if err != nil {
-			return nil, fmt.Errorf("failed  to pack  encryptedseed: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed  to pack  encryptedseed: %v", err)
 		}
 	default:
-		return nil, fmt.Errorf("failed  to pack  encryptedseed: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed  to pack  encryptedseed: %v", err)
 	}
 
 	name, err := tpm2.ObjectName(&dupTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get name key: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to get name key: %v", err)
 	}
 
 	nameEncoded := name.Buffer
@@ -554,7 +548,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	h2, err := ekPububFromPEMTemplate.NameAlg.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get ek.Scheme.Scheme.Hash: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to get ek.Scheme.Scheme.Hash: %v", err)
 	}
 
 	symmetricKey := tpm2.KDFa(
@@ -565,11 +559,11 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		/*contextV=*/ nil,
 		symSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to kdfa: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to kdfa: %v", err)
 	}
 	c, err := aes.NewCipher(symmetricKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get aes cipher: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to get aes cipher: %v", err)
 	}
 	encryptedSecret := make([]byte, len(packedSecret))
 	iv := make([]byte, len(symmetricKey))
@@ -579,7 +573,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	// start createHMAC
 	h3, err := ekPububFromPEMTemplate.NameAlg.Hash()
 	if err != nil {
-		return nil, fmt.Errorf("failed ek.Scheme.Scheme.Hash: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed ek.Scheme.Scheme.Hash: %v", err)
 	}
 
 	macKey := tpm2.KDFa(
@@ -601,7 +595,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 
 	pubEncoded := tpm2.Marshal(&dupTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get name key: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to get name key: %v", err)
 	}
 	dupPub = pubEncoded
 	dupDup = dup
@@ -629,7 +623,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	keyFileBytes := new(bytes.Buffer)
 	err = keyfile.Encode(keyFileBytes, &tkey)
 	if err != nil {
-		return nil, fmt.Errorf("error encoding keyfile %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error encoding keyfile %v", err)
 	}
 
 	wrappb := &tpmwrappb.Secret{
@@ -649,11 +643,13 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 	}
 
 	// get the bytes of the protobuf
-	b, err := protojson.Marshal(wrappb)
+	wrappedSecretproto, err := protojson.Marshal(wrappb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to wrap proto Key: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to wrap proto Key: %v", err)
 	}
 
+	// see if global clientData was set
+	//  if its also set in the Encrypt() options, use that as instead
 	opts, err := getOpts(opt...)
 	if err != nil {
 		return nil, err
@@ -663,16 +659,21 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		cd = opts.withClientData
 	}
 
+	if s.debug {
+		fmt.Printf("go-pqc-wrapping: using AAD: %s\n", opts.GetWithAad())
+		fmt.Printf("go-pqc-wrapping: using clientData: %s\n", cd.String())
+	}
+
 	// now encrypt the plaintext using the aes-gcm key which we sealed earlier into the tpm object
 	// the library we're using to do that is "github.com/hashicorp/go-kms-wrapping/v2/aead"
 	w := wrapaead.NewWrapper()
 	err = w.SetAesGcmKeyBytes(key)
 	if err != nil {
-		return nil, fmt.Errorf("error setting AESGCM Key %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error setting AESGCM Key %v", err)
 	}
 	cr, err := w.Encrypt(ctx, plaintext, opt...)
 	if err != nil {
-		return nil, fmt.Errorf("error encrypting %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error encrypting %v", err)
 	}
 
 	// Store current key id value
@@ -688,7 +689,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 		KeyInfo: &wrapping.KeyInfo{
 			Mechanism:  TPMImport,
 			KeyId:      s.keyName,
-			WrappedKey: b,
+			WrappedKey: wrappedSecretproto,
 		},
 		ClientData: cd,
 	}
@@ -700,7 +701,7 @@ func (s *RemoteWrapper) Encrypt(ctx context.Context, plaintext []byte, opt ...wr
 func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt ...wrapping.Option) ([]byte, error) {
 
 	if in.Ciphertext == nil {
-		return nil, fmt.Errorf("given ciphertext for decryption is nil")
+		return nil, fmt.Errorf("go-tpm-wrapping: given ciphertext for decryption is nil")
 	}
 
 	var rwc io.ReadWriteCloser
@@ -710,7 +711,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		var err error
 		rwc, err = openTPM(s.tpmPath)
 		if err != nil {
-			return nil, fmt.Errorf("can't open TPM %q: %v", s.tpmPath, err)
+			return nil, fmt.Errorf("go-tpm-wrapping: can't open TPM %q: %v", s.tpmPath, err)
 		}
 		defer rwc.Close()
 	}
@@ -735,7 +736,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		InPublic: tpm2.New2B(tpm2.RSAEKTemplate),
 	}.Execute(rwr, encsess)
 	if err != nil {
-		return nil, fmt.Errorf("error creating EK Primary  %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error creating EK Primary  %v", err)
 	}
 	defer func() {
 		flushContextCmd := tpm2.FlushContext{
@@ -747,13 +748,13 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	// compare the sesion "name" we just got with the values the user provided
 	if s.encryptedSessionName != "" {
 		if s.encryptedSessionName != hex.EncodeToString(createEKRsp.Name.Buffer) {
-			return nil, fmt.Errorf("session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
+			return nil, fmt.Errorf("go-tpm-wrapping: session encryption names do not match expected [%s] got [%s]", s.encryptedSessionName, hex.EncodeToString(createEKRsp.Name.Buffer))
 		}
 	}
 
 	encryptionPub, err := createEKRsp.OutPublic.Contents()
 	if err != nil {
-		return nil, fmt.Errorf("error getting session encryption public contents %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: error getting session encryption public contents %v", err)
 	}
 
 	// create an actual full encryption session using the EK we trust
@@ -776,21 +777,19 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 	wrappb := &tpmwrappb.Secret{}
 	err = protojson.Unmarshal(in.KeyInfo.WrappedKey, wrappb)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unwrap proto Key: %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping: failed to unwrap proto Key: %v", err)
 	}
 
 	if wrappb.Version != KEY_VERSION {
-		return nil, fmt.Errorf("key is encoded by key version [%d] which is incompatile with the current version [%d]", wrappb.Version, KEY_VERSION)
+		return nil, fmt.Errorf("go-tpm-wrapping: key is encoded by key version [%d] which is incompatile with the current version [%d]", wrappb.Version, KEY_VERSION)
 	}
 
-	if s.debug {
-		fmt.Printf("Decrypting with name %s\n", wrappb.Name)
-	}
-
+	// see if global clientData was set
+	//  if its also set in the Encrypt() options, use that as instead
 	cd := s.clientData
 	opts, err := getOpts(opt...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("go-tpm-wrapping: error parsing options %v", err)
 	}
 	if opts.withClientData != nil {
 		cd = opts.withClientData
@@ -800,7 +799,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 		ejsonBytes, err := json.Marshal(in.ClientData.AsMap())
 		if err != nil {
-			return nil, fmt.Errorf("failed to read clientData from blobinfo: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed to read clientData from blobinfo: %v", err)
 		}
 		ehasher := sha256.New()
 		ehasher.Write(ejsonBytes)
@@ -808,24 +807,29 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 		providedJsonBytes, err := json.Marshal(cd.AsMap())
 		if err != nil {
-			return nil, fmt.Errorf("failed to read clientData from parameter: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: failed to read clientData from parameter: %v", err)
 		}
 		phasher := sha256.New()
 		phasher.Write(providedJsonBytes)
 		phashBytes := phasher.Sum(nil)
 
 		if !bytes.Equal(ehashBytes, phashBytes) {
-			return nil, fmt.Errorf("Provided client_data does not match.  \nfrom blobinfo \n[%s]\nfrom prarameter \n[%s]", in.ClientData.String(), cd.String())
+			return nil, fmt.Errorf("go-tpm-wrapping: Provided client_data does not match.  \nfrom blobinfo \n[%s]\nfrom prarameter \n[%s]", in.ClientData.String(), cd.String())
 		}
 	}
 
+	if s.debug {
+		fmt.Printf("go-tpm-wrapping: using AAD: %s\n", opts.GetWithAad())
+		fmt.Printf("go-tpm-wrapping: using clientData: %s\n", cd.String())
+	}
+
 	if wrappb.Type != tpmwrappb.Secret_DUPLICATE {
-		return nil, fmt.Errorf("incorrect keytype, expected Secret_DUPLICATE")
+		return nil, fmt.Errorf("go-tpm-wrapping: incorrect keytype, expected Secret_DUPLICATE")
 	}
 
 	pbk, ok := wrappb.GetKey().(*tpmwrappb.Secret_DuplicatedOp)
 	if !ok {
-		return nil, fmt.Errorf("error unmarshalling tpmwrappb.Secret_DuplicatedOp")
+		return nil, fmt.Errorf("go-tpm-wrapping: error unmarshalling tpmwrappb.Secret_DuplicatedOp")
 	}
 
 	// if the encoded protobuf saved the PEM key we used to do the duplicate, comapre
@@ -838,53 +842,53 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.Ekpub))
 		if err != nil {
-			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error decoding encoded ekPub: %v", err)
 		}
 
 		blockK, _ := pem.Decode(ekPubDup)
 
 		parsedK, err := x509.ParsePKIXPublicKey(blockK.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf(" unable parsing encrypting public key from blob : %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  unable parsing encrypting public key from blob : %v", err)
 		}
 
 		ekPubParam, err := hex.DecodeString(string(s.encryptingPublicKey))
 		if err != nil {
-			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error decoding encoded ekPub: %v", err)
 		}
 
 		blockP, _ := pem.Decode(ekPubParam)
 		parsedP, err := x509.ParsePKIXPublicKey(blockP.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf(" unable parsing encrypting public key from parameter : %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  unable parsing encrypting public key from parameter : %v", err)
 		}
 
 		switch pub := parsedP.(type) {
 		case *rsa.PublicKey:
 			rsaPubPK, ok := parsedK.(*rsa.PublicKey)
 			if !ok {
-				return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+				return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to rsa")
 			}
 			rsaPubP, ok := parsedP.(*rsa.PublicKey)
 			if !ok {
-				return nil, fmt.Errorf(" error converting encryptingPublicKey to rsa")
+				return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to rsa")
 			}
 			if !rsaPubP.Equal(rsaPubPK) {
-				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
+				return nil, fmt.Errorf("go-tpm-wrapping: provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
 			}
 			pubAlg = tpm2.New2B(tpm2.RSAEKTemplate)
 
 		case *ecdsa.PublicKey:
 			ecPubPK, ok := parsedK.(*ecdsa.PublicKey)
 			if !ok {
-				return nil, fmt.Errorf(" error converting encryptingPublicKey to ec")
+				return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to ec")
 			}
 			ecPubP, ok := parsedP.(*ecdsa.PublicKey)
 			if !ok {
-				return nil, fmt.Errorf(" error converting encryptingPublicKey to ec")
+				return nil, fmt.Errorf("go-tpm-wrapping:  error converting encryptingPublicKey to ec")
 			}
 			if !ecPubP.Equal(ecPubPK) {
-				return nil, fmt.Errorf("provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
+				return nil, fmt.Errorf("go-tpm-wrapping: provided encrypting public key does not match what the key is encoded against expected \n%s\n got \n%s", string(ekPubDup), string(ekPubParam))
 			}
 
 			if s.parentKeyH2 {
@@ -894,20 +898,20 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			}
 
 		default:
-			return nil, fmt.Errorf("unsupported public key type %v", pub)
+			return nil, fmt.Errorf("go-tpm-wrapping: unsupported public key type %v", pub)
 		}
 	} else {
 
 		ekPubDup, err := hex.DecodeString(string(pbk.DuplicatedOp.Ekpub))
 		if err != nil {
-			return nil, fmt.Errorf(" error decoding encoded ekPub: %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  error decoding encoded ekPub: %v", err)
 		}
 
 		blockK, _ := pem.Decode(ekPubDup)
 
 		parsedK, err := x509.ParsePKIXPublicKey(blockK.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf(" unable parsing encrypting public key from blob : %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping:  unable parsing encrypting public key from blob : %v", err)
 		}
 
 		switch pub := parsedK.(type) {
@@ -920,27 +924,23 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				pubAlg = tpm2.New2B(tpm2.ECCEKTemplate)
 			}
 		default:
-			return nil, fmt.Errorf("unsupported public key type %v", pub)
+			return nil, fmt.Errorf("go-tpm-wrapping: unsupported public key type %v", pub)
 		}
 	}
 
 	if s.userAuth != "" && len(wrappb.Pcrs) > 0 {
-		return nil, fmt.Errorf("both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
-	}
-
-	if s.debug {
-		fmt.Printf("Key PolicyType %s\n", wrappb.Type)
+		return nil, fmt.Errorf("go-tpm-wrapping: both userAuth and PCR policies currently not supported.  Set either userAuth or pcrs")
 	}
 
 	kf, err := keyfile.Decode([]byte(pbk.DuplicatedOp.Keyfile))
 	if err != nil {
-		return nil, fmt.Errorf(" unmarshal secret.key %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping:  unmarshal secret.key %v", err)
 	}
 
 	// extract the duplicated keys into structures we can use
 	dupPub, err := tpm2.Unmarshal[tpm2.TPMTPublic](kf.Pubkey.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf(" unmarshal public  %v", err)
+		return nil, fmt.Errorf("go-tpm-wrapping:  unmarshal public  %v", err)
 	}
 
 	var plaintext []byte
@@ -956,7 +956,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				InPublic:      tpm2.New2B(keyfile.ECCSRK_H2_Template),
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("can't create primary TPM %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't create primary TPM %v", err)
 			}
 		} else {
 			cPrimary, err = tpm2.CreatePrimary{
@@ -968,7 +968,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				InPublic: pubAlg,
 			}.Execute(rwr, rsessInOut)
 			if err != nil {
-				return nil, fmt.Errorf("can't create primary TPM %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't create primary TPM %v", err)
 			}
 		}
 
@@ -985,7 +985,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			//  using EK here needs PolicySecret
 			import_sess, import_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
 			if err != nil {
-				return nil, fmt.Errorf("setting up trial session: %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: setting up trial session: %v", err)
 			}
 			defer import_session_cleanup()
 			_, err = tpm2.PolicySecret{
@@ -998,7 +998,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				NonceTPM:      import_sess.NonceTPM(),
 			}.Execute(rwr, rsessInOut)
 			if err != nil {
-				return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: error setting policy PolicySecret %v", err)
 			}
 
 			// now import the duplicated key
@@ -1017,12 +1017,12 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				},
 			}.Execute(rwr, rsessInOut)
 			if err != nil {
-				return nil, fmt.Errorf("can't run import dup %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't run import dup %v", err)
 			}
 
 			err = import_session_cleanup()
 			if err != nil {
-				return nil, fmt.Errorf("can't run flush session %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't run flush session %v", err)
 			}
 		} else {
 			// now import the duplicated key
@@ -1040,7 +1040,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				},
 			}.Execute(rwr, rsessInOut)
 			if err != nil {
-				return nil, fmt.Errorf("can't run import dup %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't run import dup %v", err)
 			}
 		}
 
@@ -1049,7 +1049,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			// create a new session to load
 			load_session, load_session_cleanup, err := tpm2.PolicySession(rwr, tpm2.TPMAlgSHA256, 16)
 			if err != nil {
-				return nil, fmt.Errorf("setting up trial session: %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: setting up trial session: %v", err)
 			}
 			defer load_session_cleanup()
 			_, err = tpm2.PolicySecret{
@@ -1062,7 +1062,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				NonceTPM:      load_session.NonceTPM(),
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("error setting policy PolicySecret %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: error setting policy PolicySecret %v", err)
 			}
 			loadkRsp, err = tpm2.Load{
 				ParentHandle: tpm2.AuthHandle{
@@ -1074,7 +1074,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				InPublic:  tpm2.New2B(*dupPub),
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("can't load object %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't load  object from H2 parent %v", err)
 			}
 		} else {
 			loadkRsp, err = tpm2.Load{
@@ -1086,7 +1086,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				InPublic:  tpm2.New2B(*dupPub),
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("can't load object %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't load object %v", err)
 			}
 		}
 
@@ -1103,17 +1103,17 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			var l map[uint][]byte
 			l, pcrList, pcrDigest, err = getPCRMap(tpm2.TPMAlgSHA256, s.pcrValues)
 			if err != nil {
-				return nil, fmt.Errorf(" error parsing pcrmap: %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping:  error parsing pcrmap: %v", err)
 			}
 			if s.debug {
-				fmt.Printf("PCRList provided with command line: %v \n", l)
+				fmt.Printf("go-tpm-wrapping: PCRList provided with command line: %v \n", l)
 			}
 		} else {
 
 			for _, v := range wrappb.Pcrs {
 				pcrList = append(pcrList, uint(v.Pcr))
 				if s.debug {
-					fmt.Printf("Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
+					fmt.Printf("go-tpm-wrapping: Key encoded with PCR: %d %s\n", v.Pcr, hex.EncodeToString(v.Value))
 				}
 			}
 		}
@@ -1135,17 +1135,17 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			flush := tpm2.FlushContext{FlushHandle: cPrimary.ObjectHandle}
 			_, err = flush.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("can't close TPM %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't close TPM %v", err)
 			}
 
 			tc, err := NewPCRAndDuplicateSelectSession(rwr, sel.PCRSelections, tpm2.TPM2BDigest{Buffer: pcrDigest}, []byte(s.userAuth), cPrimary.Name)
 			if err != nil {
-				return nil, fmt.Errorf("error creating NewPCRAndDuplicateSelectSession%v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: error creating NewPCRAndDuplicateSelectSession%v", err)
 			}
 
 			or_sess, or_cleanup, err := tc.GetSession()
 			if err != nil {
-				return nil, fmt.Errorf("error getting session: %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: error getting session: %v", err)
 			}
 			defer or_cleanup()
 			// now unseal the sensitive bit (this was the original env.Key value set during encryption)
@@ -1157,7 +1157,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				},
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("unseal failed: %s", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: unseal failed: %s", err)
 			}
 
 			decryptedKey = unseaResp.OutData.Buffer
@@ -1168,7 +1168,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 			flush := tpm2.FlushContext{FlushHandle: cPrimary.ObjectHandle}
 			_, err = flush.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("can't close TPM %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: can't close TPM %v", err)
 			}
 
 			tc, err := NewPolicyAuthValueAndDuplicateSelectSession(rwr, []byte(s.userAuth), cPrimary.Name)
@@ -1178,7 +1178,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 
 			or_sess, or_cleanup, err := tc.GetSession()
 			if err != nil {
-				return nil, fmt.Errorf("error getting session: %v", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: error getting session: %v", err)
 			}
 			defer or_cleanup()
 
@@ -1190,7 +1190,7 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 				},
 			}.Execute(rwr)
 			if err != nil {
-				return nil, fmt.Errorf("unseal failed: %s", err)
+				return nil, fmt.Errorf("go-tpm-wrapping: unseal failed: %s", err)
 			}
 
 			decryptedKey = unseaResp.OutData.Buffer
@@ -1201,15 +1201,15 @@ func (s *RemoteWrapper) Decrypt(ctx context.Context, in *wrapping.BlobInfo, opt 
 		w := wrapaead.NewWrapper()
 		err = w.SetAesGcmKeyBytes(decryptedKey)
 		if err != nil {
-			return nil, fmt.Errorf("error setting AESGCM Key %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error setting AESGCM Key %v", err)
 		}
 		plaintext, err = w.Decrypt(ctx, in, opt...)
 		if err != nil {
-			return nil, fmt.Errorf("error decrypting %v", err)
+			return nil, fmt.Errorf("go-tpm-wrapping: error decrypting %v", err)
 		}
 
 	default:
-		return nil, fmt.Errorf("invalid mechanism: %d", in.KeyInfo.Mechanism)
+		return nil, fmt.Errorf("go-tpm-wrapping: invalid mechanism: %d", in.KeyInfo.Mechanism)
 	}
 
 	return plaintext, nil

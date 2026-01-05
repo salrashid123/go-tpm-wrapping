@@ -161,6 +161,7 @@ func WithSessionEncryptionName(with string) wrapping.Option {
 	}
 }
 
+// WithParentKeyH2 boolean falue to signal if the parent key is the H2
 func WithParentKeyH2(with bool) wrapping.Option {
 	return func() interface{} {
 		return OptionFunc(func(o *options) error {
@@ -179,6 +180,7 @@ func WithDebug(with bool) wrapping.Option {
 	}
 }
 
+// WithClientData unencrypted json string to attach to the encoded key.  These values are not used in encryption or validation.  For that use wrapping.WithAad().
 func WithClientData(with string) wrapping.Option {
 	if with == "" {
 		return nil
